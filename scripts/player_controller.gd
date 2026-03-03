@@ -14,6 +14,8 @@ var _pending_explosion := false
 var _suck_timer := 0.0
 var _active_suck_area: Area3D = null
 
+const EXPLOSION_PREFAB = preload("res://addons/ExplosionExport/Prefab.tscn")
+
 func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	
@@ -113,7 +115,12 @@ func _explode_at_crosshair() -> void:
 		body.apply_central_impulse(dir * explosion_force * falloff)
 
 func _spawn_explosion(_pos: Vector3) -> void:
-	pass
+	var explosion = EXPLOSION_PREFAB.instantiate()
+	get_parent().add_child(explosion)
+	explosion.global_position = _pos
+	
+	# Clean up the explosion after it finishes (longest particle lifetime is 7s)
+	get_tree().create_timer(10.0).timeout.connect(explosion.queue_free)
 
 func _start_suck() -> void:
 	_stop_suck() # Clear any existing suck
