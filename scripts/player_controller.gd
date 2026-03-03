@@ -98,6 +98,8 @@ func _explode_at_crosshair() -> void:
 	if hit_point == Vector3.INF:
 		return
 
+	_spawn_explosion(hit_point)
+
 	var bodies = await _get_bodies_in_sphere(hit_point, explosion_radius)
 	for body in bodies:
 		if not body is RigidBody3D:
@@ -109,6 +111,9 @@ func _explode_at_crosshair() -> void:
 		if dir.is_zero_approx():
 			dir = Vector3.UP
 		body.apply_central_impulse(dir * explosion_force * falloff)
+
+func _spawn_explosion(_pos: Vector3) -> void:
+	pass
 
 func _start_suck() -> void:
 	_stop_suck() # Clear any existing suck

@@ -1,9 +1,9 @@
 extends StaticBody3D
 
 var range_radius: float = 30.0
-var shoot_interval: float = 2.0
+var shoot_interval: float = 0.5
 var shoot_timer: float = 0.0
-var projectiles_per_shot: int = 19
+var projectiles_per_shot: int = 3
 
 func _ready() -> void:
 	# Cylinder base
@@ -45,11 +45,11 @@ func _shoot_at_enemies() -> void:
 	if enemies.is_empty():
 		return
 		
-	# Target up to N enemies
-	var targets_count = min(enemies.size(), projectiles_per_shot)
-	for i in range(targets_count):
-		if is_instance_valid(enemies[i]):
-			_spawn_projectile(enemies[i])
+	# Fire exactly 'projectiles_per_shot' missiles, each targeting a random enemy in range
+	for i in range(projectiles_per_shot):
+		var random_enemy = enemies[randi() % enemies.size()]
+		if is_instance_valid(random_enemy):
+			_spawn_projectile(random_enemy)
 
 func _spawn_projectile(target: Node3D) -> void:
 	var projectile = Area3D.new()
