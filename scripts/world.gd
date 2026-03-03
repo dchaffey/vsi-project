@@ -1,5 +1,7 @@
 extends Node3D
 
+var platform_size = Vector3(100, 1, 100)
+
 func _ready() -> void:
 	# Boost global gravity programmatically (optional but effective)
 	ProjectSettings.set_setting("physics/3d/default_gravity", 19.6)
@@ -11,6 +13,7 @@ func _ready() -> void:
 	spawn_enemies()
 	spawn_player()
 	spawn_crosshair()
+	spawn_tower()
 
 
 func spawn_environment() -> void:
@@ -35,7 +38,6 @@ func spawn_sunlight() -> void:
 	print("Sun light spawned.")
 
 func spawn_platform() -> void:
-	var platform_size = Vector3(100, 1, 100)
 	var static_body = StaticBody3D.new()
 	static_body.position = Vector3(0, -0.5, 0)
 	static_body.collision_layer = 1 # Layer 1: Ground
@@ -67,30 +69,10 @@ func spawn_player() -> void:
 	player.collision_layer = 4 # Layer 3 (bit 2^2=4)
 	player.collision_mask = 1 | 2 # Detect Ground and Enemies
 	
-	# Mesh
-	var mesh_instance = MeshInstance3D.new()
-	var capsule_mesh = CapsuleMesh.new()
-	mesh_instance.mesh = capsule_mesh
-	player.add_child(mesh_instance)
-	
-	# Collision
-	var collision_shape = CollisionShape3D.new()
-	var shape = CapsuleShape3D.new()
-	collision_shape.shape = shape
-	player.add_child(collision_shape)
-	
-	# Script
+	# Only attach script; Player builds itself in _ready()
 	player.set_script(load("res://scripts/player_controller.gd"))
 	
 	add_child(player)
-	
-	# Camera (First-person perspective for the crosshair)
-	var camera = Camera3D.new()
-	camera.name = "Camera3D"
-	camera.position = Vector3(0, 0.5, 0) # Near eye level
-	player.add_child(camera)
-	camera.make_current()
-	
 	print("Player spawned with first-person camera.")
 
 func spawn_crosshair() -> void:
@@ -138,7 +120,6 @@ func spawn_enemies() -> void:
 		add_child(enemy)
 
 func spawn_walls() -> void:
-	var platform_size = 50.0
 	var wall_height = 20.0
 	var wall_thickness = 1.0
 	var half_size = platform_size / 2.0
@@ -149,11 +130,13 @@ func spawn_walls() -> void:
 	wall_material.albedo_color.a = 0.5 # Semi-transparent
 	
 	# Wall data: [position, size]
+	var platform_width = platform_size.x
+	var platform_depth = platform_size.z
 	var walls = [
-		[Vector3(0, wall_height/2, -half_size), Vector3(platform_size, wall_height, wall_thickness)], # North
-		[Vector3(0, wall_height/2, half_size), Vector3(platform_size, wall_height, wall_thickness)], # South
-		[Vector3(-half_size, wall_height/2, 0), Vector3(wall_thickness, wall_height, platform_size)], # West
-		[Vector3(half_size, wall_height/2, 0), Vector3(wall_thickness, wall_height, platform_size)]  # East
+		[Vector3(0, wall_height/2, -half_size.z), Vector3(platform_width, wall_height, wall_thickness)], # North
+		[Vector3(0, wall_height/2, half_size.z), Vector3(platform_width, wall_height, wall_thickness)], # South
+		[Vector3(-half_size.x, wall_height/2, 0), Vector3(wall_thickness, wall_height, platform_depth)], # West
+		[Vector3(half_size.x, wall_height/2, 0), Vector3(wall_thickness, wall_height, platform_depth)]  # East
 	]
 	
 	for wall_data in walls:
@@ -182,3 +165,11 @@ func spawn_walls() -> void:
 		add_child(static_body)
 	
 	print("Walls spawned around the platform.")
+
+func spawn_tower() -> void:
+	var tower = StaticBody3D.new()
+	tower.position = Vector3(0, 0, 0) # Middle of the platform
+	tower.set_script(load("res://scripts/tower.gd"))
+	
+	add_child(tower)
+	print("Tower spawned in the middle of the platform.")

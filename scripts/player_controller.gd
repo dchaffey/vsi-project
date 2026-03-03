@@ -16,8 +16,27 @@ var _active_suck_area: Area3D = null
 
 func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	
+	# Self-build: Mesh
+	var mesh_instance = MeshInstance3D.new()
+	var capsule_mesh = CapsuleMesh.new()
+	mesh_instance.mesh = capsule_mesh
+	add_child(mesh_instance)
+	
+	# Self-build: Collision
+	var collision_shape = CollisionShape3D.new()
+	var shape = CapsuleShape3D.new()
+	collision_shape.shape = shape
+	add_child(collision_shape)
+	
+	# Self-build: Camera
+	camera = Camera3D.new()
+	camera.name = "Camera3D"
+	camera.position = Vector3(0, 0.5, 0) # Near eye level
+	add_child(camera)
+	camera.make_current()
+
 	await get_tree().process_frame
-	camera = get_node_or_null("Camera3D")
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
