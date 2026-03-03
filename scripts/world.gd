@@ -1,6 +1,6 @@
 extends Node3D
 
-var platform_size = Vector3(100, 1, 100)
+var platform_size = Vector3(50, 1, 50)
 
 func _ready() -> void:
 	# Boost global gravity programmatically (optional but effective)
