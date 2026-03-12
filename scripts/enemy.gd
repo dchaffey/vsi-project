@@ -1,6 +1,6 @@
 extends RigidBody3D
 
-enum State { PATHING, RAGDOLL, RECOVERING }
+enum State { PATHING, RAGDOLL, RECOVERING, DEAD }
 
 ## Reference to the terrain node (set by the spawner).
 var terrain: StaticBody3D
@@ -14,6 +14,12 @@ var height_correction_strength: float = 10.0
 ## detection (in world units). Cheaper than a distance check.
 var goal_reach_half_size: float = 2.0
 
+## HP and impact damage.
+var hp: float = 100.0
+var max_hp: float = 100.0
+var impact_damage_threshold: float = 15.0
+var impact_damage_scale: float = 2.0
+
 ## Cached goal position (world space, XZ only).
 var _goal_pos := Vector3.ZERO
 ## Cached start positions (world space).
@@ -23,6 +29,12 @@ var _rng := RandomNumberGenerator.new()
 
 var _state: State = State.PATHING
 var _settle_timer: float = 0.0
+var _dead_timer: float = 0.0
+var _prev_velocity := Vector3.ZERO
+var _material: StandardMaterial3D
+
+const _COLOR_FULL_HP := Color(0.85, 0.85, 0.85)
+const _COLOR_LOW_HP := Color(1.0, 0.4, 0.0)
 ## Wander: a slowly-drifting angular offset applied to the flow direction.
 var _wander_angle: float = 0.0
 var _wander_target: float = 0.0
@@ -50,6 +62,21 @@ func _physics_process(delta: float) -> void:
 			_process_ragdoll(delta)
 		State.RECOVERING:
 			_process_recovering(delta)
+		State.DEAD:
+			_process_dead(delta)
+			_prev_velocity = linear_velocity
+			return
+
+	# --- Impact damage detection ---
+	var velocity_delta := (linear_velocity - _prev_velocity).length()
+	if velocity_delta > impact_damage_threshold:
+		var damage := (velocity_delta - impact_damage_threshold) * impact_damage_scale
+		hp -= damage
+		if hp <= 0.0:
+			_enter_dead()
+		else:
+			_update_color()
+	_prev_velocity = linear_velocity
 
 	# --- Goal arrival check (runs in all states) ---
 	if absf(pos.x - _goal_pos.x) < goal_reach_half_size \
@@ -131,6 +158,26 @@ func _unlock_angular_axes() -> void:
 	axis_lock_angular_z = false
 
 
+func _enter_dead() -> void:
+	hp = 0.0
+	_dead_timer = 0.0
+	_state = State.DEAD
+	_unlock_angular_axes()
+	_update_color()
+
+
+func _process_dead(delta: float) -> void:
+	_dead_timer += delta
+	if _dead_timer >= 3.0:
+		_respawn_at_start()
+
+
+func _update_color() -> void:
+	if _material:
+		var t := clampf(1.0 - hp / max_hp, 0.0, 1.0)
+		_material.albedo_color = _COLOR_FULL_HP.lerp(_COLOR_LOW_HP, t)
+
+
 ## Teleport the enemy back to a random road start position.
 func _respawn_at_start() -> void:
 	if _start_positions.size() == 0:
@@ -140,6 +187,9 @@ func _respawn_at_start() -> void:
 	global_position = start_pos + Vector3(0.0, 2.0, 0.0)
 	linear_velocity = Vector3.ZERO
 	angular_velocity = Vector3.ZERO
+	hp = max_hp
+	_prev_velocity = Vector3.ZERO
+	_update_color()
 	_state = State.PATHING
 	_settle_timer = 0.0
 	_wander_angle = 0.0
