@@ -1,6 +1,6 @@
 extends Node3D
 
-var platform_size = Vector3(50, 1, 50)
+var terrain: StaticBody3D
 
 func _ready() -> void:
 	# Boost global gravity programmatically (optional but effective)
@@ -8,13 +8,15 @@ func _ready() -> void:
 	
 	spawn_environment()
 	spawn_sunlight()
-	spawn_platform()
+	spawn_terrain()
 	spawn_walls()
 	spawn_enemies()
 	spawn_player()
 	spawn_crosshair()
 	spawn_tower()
 
+# func _process(delta: float) -> void:
+# 	print("FPS %d" % Engine.get_frames_per_second())
 
 func spawn_environment() -> void:
 	var world_env = WorldEnvironment.new()
@@ -37,34 +39,16 @@ func spawn_sunlight() -> void:
 	add_child(sun)
 	print("Sun light spawned.")
 
-func spawn_platform() -> void:
-	var static_body = StaticBody3D.new()
-	static_body.position = Vector3(0, -0.5, 0)
-	static_body.collision_layer = 1 # Layer 1: Ground
-	
-	# Mesh
-	var mesh_instance = MeshInstance3D.new()
-	var box_mesh = BoxMesh.new()
-	box_mesh.size = platform_size
-	mesh_instance.mesh = box_mesh
-	var platform_material = StandardMaterial3D.new()
-	platform_material.albedo_color = Color(0.5, 0.3, 1.0)
-	mesh_instance.material_override = platform_material
-	static_body.add_child(mesh_instance)
-	
-	# Collision
-	var collision_shape = CollisionShape3D.new()
-	var shape = BoxShape3D.new()
-	shape.size = platform_size
-	collision_shape.shape = shape
-	static_body.add_child(collision_shape)
-	
-	add_child(static_body)
-	print("Platform spawned.")
+func spawn_terrain() -> void:
+	var terrain_scene := preload("res://scenes/terrain.tscn")
+	terrain = terrain_scene.instantiate()
+	add_child(terrain)
+	print("Terrain spawned.")
 
 func spawn_player() -> void:
 	var player = CharacterBody3D.new()
-	player.position = Vector3(0, 5, 0)
+	var spawn_y: float = terrain.get_height_at(0.0, 0.0) + 3.0
+	player.position = Vector3(0, spawn_y, 0)
 	player.name = "Player"
 	player.collision_layer = 4 # Layer 3 (bit 2^2=4)
 	player.collision_mask = 1 | 2 # Detect Ground and Enemies
@@ -95,11 +79,16 @@ func spawn_crosshair() -> void:
 
 func spawn_enemies() -> void:
 	var rng = RandomNumberGenerator.new()
+	# Terrain half-extents for random placement within bounds
+	var half_w: float = (terrain.terrain_width - 1) * terrain.cell_size * 0.5
+	var half_d: float = (terrain.terrain_depth - 1) * terrain.cell_size * 0.5
+
 	for i in range(30):
 		var enemy = RigidBody3D.new()
-		var x = rng.randi_range(-20, 20)
-		var y = rng.randi_range(-20, 20)
-		enemy.position = Vector3(x, 2, y)
+		var x = rng.randf_range(-half_w + 5.0, half_w - 5.0)
+		var z = rng.randf_range(-half_d + 5.0, half_d - 5.0)
+		var y = terrain.get_height_at(x, z) + 2.0  # Spawn above the surface
+		enemy.position = Vector3(x, y, z)
 		enemy.mass = 1.0
 		enemy.name = "Enemy_" + str(i)
 		enemy.collision_layer = 2 # Layer 2
@@ -120,33 +109,36 @@ func spawn_enemies() -> void:
 		add_child(enemy)
 
 func spawn_walls() -> void:
-	var wall_height = 20.0
+	var wall_height = 30.0
 	var wall_thickness = 1.0
-	var half_size = platform_size / 2.0
-	
+
+	# Derive terrain half-extents from the terrain node
+	var half_w: float = (terrain.terrain_width - 1) * terrain.cell_size * 0.5
+	var half_d: float = (terrain.terrain_depth - 1) * terrain.cell_size * 0.5
+	var terrain_w: float = half_w * 2.0
+	var terrain_d: float = half_d * 2.0
+
 	var wall_material = StandardMaterial3D.new()
 	wall_material.albedo_color = Color(0.3, 0.3, 0.3) # Dark grey
 	wall_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	wall_material.albedo_color.a = 0.5 # Semi-transparent
-	
+
 	# Wall data: [position, size]
-	var platform_width = platform_size.x
-	var platform_depth = platform_size.z
 	var walls = [
-		[Vector3(0, wall_height/2, -half_size.z), Vector3(platform_width, wall_height, wall_thickness)], # North
-		[Vector3(0, wall_height/2, half_size.z), Vector3(platform_width, wall_height, wall_thickness)], # South
-		[Vector3(-half_size.x, wall_height/2, 0), Vector3(wall_thickness, wall_height, platform_depth)], # West
-		[Vector3(half_size.x, wall_height/2, 0), Vector3(wall_thickness, wall_height, platform_depth)]  # East
+		[Vector3(0, wall_height / 2, -half_d), Vector3(terrain_w, wall_height, wall_thickness)], # North
+		[Vector3(0, wall_height / 2, half_d), Vector3(terrain_w, wall_height, wall_thickness)],  # South
+		[Vector3(-half_w, wall_height / 2, 0), Vector3(wall_thickness, wall_height, terrain_d)], # West
+		[Vector3(half_w, wall_height / 2, 0), Vector3(wall_thickness, wall_height, terrain_d)],  # East
 	]
-	
+
 	for wall_data in walls:
 		var pos = wall_data[0]
 		var size = wall_data[1]
-		
+
 		var static_body = StaticBody3D.new()
 		static_body.position = pos
 		static_body.collision_layer = 1 # Ground layer
-		
+
 		# Mesh
 		var mesh_instance = MeshInstance3D.new()
 		var box_mesh = BoxMesh.new()
@@ -154,22 +146,26 @@ func spawn_walls() -> void:
 		mesh_instance.mesh = box_mesh
 		mesh_instance.material_override = wall_material
 		static_body.add_child(mesh_instance)
-		
+
 		# Collision
 		var collision_shape = CollisionShape3D.new()
 		var shape = BoxShape3D.new()
 		shape.size = size
 		collision_shape.shape = shape
 		static_body.add_child(collision_shape)
-		
+
 		add_child(static_body)
-	
-	print("Walls spawned around the platform.")
+
+	print("Walls spawned around the terrain.")
 
 func spawn_tower() -> void:
 	var tower = StaticBody3D.new()
-	tower.position = Vector3(0, 0, 0) # Middle of the platform
+	# Place at terrain center, sunk slightly so the base blends into the ground
+	var tower_x := 0.0
+	var tower_z := 0.0
+	var tower_y: float = terrain.get_height_at(tower_x, tower_z) - 2.0
+	tower.position = Vector3(tower_x, tower_y, tower_z)
 	tower.set_script(load("res://scripts/tower.gd"))
 	
 	add_child(tower)
-	print("Tower spawned in the middle of the platform.")
+	print("Tower spawned in the middle of the terrain.")

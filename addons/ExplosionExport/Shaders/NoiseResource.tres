@@ -1,4 +1,4 @@
-[gd_resource type="NoiseTexture3D" load_steps=3 format=3 uid="uid://bwydqh15qmvxa"]
+[gd_resource type="NoiseTexture3D" format=3 uid="uid://bwydqh15qmvxa"]
 
 [sub_resource type="Gradient" id="Gradient_rmosx"]
 
@@ -18,8 +18,8 @@ domain_warp_amplitude = 5.0
 width = 128
 height = 128
 depth = 128
-invert = true
-seamless = true
-seamless_blend_skirt = 0.321
-color_ramp = SubResource("Gradient_rmosx")
 noise = SubResource("FastNoiseLite_m4ay1")
+color_ramp = SubResource("Gradient_rmosx")
+seamless = true
+invert = true
+seamless_blend_skirt = 0.321
