@@ -79,20 +79,29 @@ func spawn_crosshair() -> void:
 
 func spawn_enemies() -> void:
 	var rng = RandomNumberGenerator.new()
-	# Terrain half-extents for random placement within bounds
-	var half_w: float = (terrain.terrain_width - 1) * terrain.cell_size * 0.5
-	var half_d: float = (terrain.terrain_depth - 1) * terrain.cell_size * 0.5
+	var start_positions: Array = terrain.get_start_world_positions()
+	if start_positions.size() == 0:
+		print("No road starts — skipping enemy spawn.")
+		return
+
+	var enemy_script = load("res://scripts/enemy.gd")
 
 	for i in range(30):
 		var enemy = RigidBody3D.new()
-		var x = rng.randf_range(-half_w + 5.0, half_w - 5.0)
-		var z = rng.randf_range(-half_d + 5.0, half_d - 5.0)
-		var y = terrain.get_height_at(x, z) + 2.0  # Spawn above the surface
+		# Pick a random road start and offset slightly so they don't all stack
+		var start_pos: Vector3 = start_positions[rng.randi_range(0, start_positions.size() - 1)]
+		var x: float = start_pos.x + rng.randf_range(-2.0, 2.0)
+		var z: float = start_pos.z + rng.randf_range(-2.0, 2.0)
+		var y: float = terrain.get_height_at(x, z) + 2.0
 		enemy.position = Vector3(x, y, z)
 		enemy.mass = 1.0
 		enemy.name = "Enemy_" + str(i)
 		enemy.collision_layer = 2 # Layer 2
 		enemy.collision_mask = 1 | 2 | 4 # Ground, Enemies, Player
+
+		# Attach the enemy AI script
+		enemy.set_script(enemy_script)
+		enemy.terrain = terrain
 	
 		# Mesh
 		var mesh_instance = MeshInstance3D.new()

@@ -84,6 +84,16 @@ var _is_ready := false
 var _road_blend: Array = []
 var _rebuild_queued := false
 
+## Flow field for enemy navigation. Computed once during initial build.
+## [x][z] of Vector2 — normalized direction to move toward the nearest road,
+## then along the road toward the goal. Zero vector if no paths exist.
+var flow_field: Array = []
+## Distance-to-nearest-road field. [x][z] of float. 0.0 = on the road.
+## INF if no paths exist.
+var path_distance: Array = []
+## Whether the flow field has been computed. Once true, rebuilds skip recomputation.
+var _flow_field_built := false
+
 
 func _ready() -> void:
 	_is_ready = true
@@ -124,6 +134,10 @@ func _rebuild() -> void:
 		if paths.size() > 0:
 			_stamp_roads(height_map, paths)
 		print("Roads: %d path(s) found from %d start(s)." % [paths.size(), road_starts.size()])
+
+	# --- Flow field (computed once, never recomputed) ---
+	if not _flow_field_built:
+		_build_flow_field(paths)
 
 	var array_mesh := _create_terrain_mesh(height_map)
 
@@ -462,6 +476,262 @@ func _smooth_path_heights(map: Array, path: Array) -> PackedFloat64Array:
 			smoothed[i] = sum / float(hi - lo + 1)
 
 	return smoothed
+
+
+# ---------------------------------------------------------------------------
+# Flow field — precomputed navigation for enemies
+# ---------------------------------------------------------------------------
+
+## Build the flow field and distance field from the computed road paths.
+## This is called once during the first _rebuild() and never recomputed.
+##
+## Algorithm:
+##   1. Walk each path from start→goal, recording per-cell flow direction
+##      (pointing toward the goal along the path) and distance-to-goal.
+##   2. Expand path cells outward by road_width/2 so the entire road surface
+##      is marked as "on-road" (path_distance = 0).
+##   3. BFS flood-fill from all road cells outward. Every off-road cell gets
+##      a direction vector pointing toward its nearest road cell, and a
+##      distance value equal to the grid-step distance to that road cell.
+##
+## The result is two grids:
+##   flow_field [x][z] — Vector2 direction to follow
+##   path_distance [x][z] — 0.0 on road, >0 off road
+func _build_flow_field(paths: Array) -> void:
+	# Initialise grids
+	flow_field = []
+	path_distance = []
+	for x in range(terrain_width):
+		var flow_row: Array = []
+		flow_row.resize(terrain_depth)
+		var dist_row: Array = []
+		dist_row.resize(terrain_depth)
+		for z in range(terrain_depth):
+			flow_row[z] = Vector2.ZERO
+			dist_row[z] = INF
+		flow_field.append(flow_row)
+		path_distance.append(dist_row)
+
+	if paths.size() == 0:
+		print("Flow field: no paths provided, field left empty.")
+		return
+
+	# ----- Step 1: Mark path centerline cells with goal-directed flow -----
+	# For each path cell, store the direction toward the goal (next cell in path)
+	# and the distance-to-goal along the path. When paths overlap, keep the
+	# shorter distance-to-goal.
+	# We also store the goal-distance separately for the on-road BFS seeding.
+	var goal_dist_map: Dictionary = {}  # Vector2i -> float (distance to goal along path)
+
+	for path in paths:
+		if path.size() < 2:
+			continue
+
+		# Compute cumulative distance from goal backward along the path.
+		# path[0] = start, path[-1] = goal
+		var cum_dist := PackedFloat64Array()
+		cum_dist.resize(path.size())
+		cum_dist[path.size() - 1] = 0.0
+		for i in range(path.size() - 2, -1, -1):
+			var dx: float = float(path[i + 1].x - path[i].x)
+			var dz: float = float(path[i + 1].y - path[i].y)
+			var seg_len: float = sqrt(dx * dx + dz * dz)
+			cum_dist[i] = cum_dist[i + 1] + seg_len
+
+		for i in range(path.size()):
+			var cell: Vector2i = path[i]
+			var d_to_goal: float = cum_dist[i]
+
+			# Only overwrite if this path offers a shorter route to goal
+			if not goal_dist_map.has(cell) or d_to_goal < goal_dist_map[cell]:
+				goal_dist_map[cell] = d_to_goal
+
+				# Direction: point toward next cell in path (toward goal)
+				var dir := Vector2.ZERO
+				if i < path.size() - 1:
+					var next: Vector2i = path[i + 1]
+					dir = Vector2(float(next.x - cell.x), float(next.y - cell.y)).normalized()
+				elif i > 0:
+					# Goal cell: continue in the direction we arrived from
+					var prev: Vector2i = path[i - 1]
+					dir = Vector2(float(cell.x - prev.x), float(cell.y - prev.y)).normalized()
+
+				flow_field[cell.x][cell.y] = dir
+				path_distance[cell.x][cell.y] = 0.0
+
+	# ----- Step 2: Expand road surface (half-width around centerline) -----
+	# BFS from centerline cells outward up to road_width/2 cells.
+	# These cells are "on-road" (path_distance = 0) and inherit the flow
+	# direction of their nearest centerline cell.
+	var half_w_cells: float = road_width * 0.5
+	var road_queue: Array = []  # [Vector2i cell, float dist_from_center, Vector2 flow_dir, float goal_dist]
+	for cell in goal_dist_map:
+		road_queue.append([cell, 0.0, flow_field[cell.x][cell.y], goal_dist_map[cell]])
+
+	var cardinal_dirs := [
+		Vector2i(-1, 0), Vector2i(1, 0), Vector2i(0, -1), Vector2i(0, 1),
+	]
+	var diagonal_dirs := [
+		Vector2i(-1, -1), Vector2i(-1, 1), Vector2i(1, -1), Vector2i(1, 1),
+	]
+	var all_dirs := cardinal_dirs + diagonal_dirs
+
+	# Track which cells have been claimed by road expansion (separate from
+	# centerline so we don't overwrite centerline cells with worse data).
+	var road_visited: Dictionary = {}
+	for cell in goal_dist_map:
+		road_visited[cell] = true
+
+	var qi := 0
+	while qi < road_queue.size():
+		var entry: Array = road_queue[qi]
+		qi += 1
+		var cell: Vector2i = entry[0]
+		var dist_from_center: float = entry[1]
+		var inherited_flow: Vector2 = entry[2]
+		var inherited_goal_dist: float = entry[3]
+
+		for dir in all_dirs:
+			var nb: Vector2i = cell + dir
+			if not _in_bounds(nb) or road_visited.has(nb):
+				continue
+
+			var step: float = 1.0 if (dir.x == 0 or dir.y == 0) else 1.41421356
+			var new_dist: float = dist_from_center + step
+			if new_dist > half_w_cells:
+				continue
+
+			road_visited[nb] = true
+			flow_field[nb.x][nb.y] = inherited_flow
+			path_distance[nb.x][nb.y] = 0.0
+			road_queue.append([nb, new_dist, inherited_flow, inherited_goal_dist])
+
+	# ----- Step 3: BFS flood-fill for off-road cells -----
+	# Seed the BFS with all road cells (path_distance == 0). Every off-road
+	# cell gets a flow direction pointing toward its nearest road cell.
+	var bfs_queue: Array = []  # [Vector2i cell]
+	for x in range(terrain_width):
+		for z in range(terrain_depth):
+			if path_distance[x][z] == 0.0:
+				bfs_queue.append(Vector2i(x, z))
+
+	var bi := 0
+	while bi < bfs_queue.size():
+		var cell: Vector2i = bfs_queue[bi]
+		bi += 1
+		var current_dist: float = path_distance[cell.x][cell.y]
+
+		for dir in all_dirs:
+			var nb: Vector2i = cell + dir
+			if not _in_bounds(nb):
+				continue
+
+			var step: float = 1.0 if (dir.x == 0 or dir.y == 0) else 1.41421356
+			var new_dist: float = current_dist + step
+
+			if new_dist < path_distance[nb.x][nb.y]:
+				path_distance[nb.x][nb.y] = new_dist
+				# Direction: point from nb toward cell (i.e., toward the road)
+				flow_field[nb.x][nb.y] = Vector2(float(cell.x - nb.x), float(cell.y - nb.y)).normalized()
+				bfs_queue.append(nb)
+
+	_flow_field_built = true
+	print("Flow field built (%dx%d, %d road cells, %d total cells)." % [
+		terrain_width, terrain_depth, road_visited.size(), terrain_width * terrain_depth])
+
+
+# ---------------------------------------------------------------------------
+# Flow field queries — public API for enemies / AI
+# ---------------------------------------------------------------------------
+
+## Convert world coordinates to continuous grid coordinates, clamped to bounds.
+## Returns Vector2(gx, gz). Shared by all world→grid query helpers.
+func _world_to_grid(wx: float, wz: float) -> Vector2:
+	var half_w: float = (terrain_width - 1) * cell_size * 0.5
+	var half_d: float = (terrain_depth - 1) * cell_size * 0.5
+	var gx: float = clampf((wx + half_w) / cell_size, 0.0, float(terrain_width - 1))
+	var gz: float = clampf((wz + half_d) / cell_size, 0.0, float(terrain_depth - 1))
+	return Vector2(gx, gz)
+
+
+## Returns the flow direction at a world-space (wx, wz) position.
+## The returned Vector2 is a normalised direction in grid space (x, z).
+## To use as a 3D velocity: Vector3(dir.x, 0, dir.y).normalized() * speed.
+## Returns Vector2.ZERO if the flow field has not been built.
+func get_flow_direction(wx: float, wz: float) -> Vector2:
+	if flow_field.size() == 0:
+		return Vector2.ZERO
+
+	var g := _world_to_grid(wx, wz)
+	var x0 := mini(int(g.x), terrain_width - 2)
+	var z0 := mini(int(g.y), terrain_depth - 2)
+	var x1 := x0 + 1
+	var z1 := z0 + 1
+	var fx: float = g.x - float(x0)
+	var fz: float = g.y - float(z0)
+
+	# Bilinear interpolation of the flow vectors
+	var f00: Vector2 = flow_field[x0][z0]
+	var f10: Vector2 = flow_field[x1][z0]
+	var f01: Vector2 = flow_field[x0][z1]
+	var f11: Vector2 = flow_field[x1][z1]
+
+	var flow := f00 * (1.0 - fx) * (1.0 - fz) \
+			  + f10 * fx * (1.0 - fz) \
+			  + f01 * (1.0 - fx) * fz \
+			  + f11 * fx * fz
+
+	return flow.normalized() if flow.length_squared() > 0.0001 else Vector2.ZERO
+
+
+## Returns the interpolated distance to the nearest road at a world-space
+## (wx, wz) position. 0.0 means on the road. Units are in grid cells.
+## Returns INF if the flow field has not been built.
+func get_path_distance(wx: float, wz: float) -> float:
+	if path_distance.size() == 0:
+		return INF
+
+	var g := _world_to_grid(wx, wz)
+	var x0 := mini(int(g.x), terrain_width - 2)
+	var z0 := mini(int(g.y), terrain_depth - 2)
+	var x1 := x0 + 1
+	var z1 := z0 + 1
+	var fx: float = g.x - float(x0)
+	var fz: float = g.y - float(z0)
+
+	var d00: float = path_distance[x0][z0]
+	var d10: float = path_distance[x1][z0]
+	var d01: float = path_distance[x0][z1]
+	var d11: float = path_distance[x1][z1]
+
+	return d00 * (1.0 - fx) * (1.0 - fz) \
+		 + d10 * fx * (1.0 - fz) \
+		 + d01 * (1.0 - fx) * fz \
+		 + d11 * fx * fz
+
+
+## Returns true if the world-space (wx, wz) position is on or very near a road.
+## Uses a small threshold (0.5 grid cells) to account for interpolation.
+func is_on_road(wx: float, wz: float) -> bool:
+	return get_path_distance(wx, wz) < 0.5
+
+
+## Returns the world-space position of the road goal (Vector3, Y = terrain height).
+func get_goal_world_position() -> Vector3:
+	var half_w: float = (terrain_width - 1) * cell_size * 0.5
+	var half_d: float = (terrain_depth - 1) * cell_size * 0.5
+	return _grid_to_world(road_goal, half_w, half_d)
+
+
+## Returns an array of world-space Vector3 positions for each road start point.
+func get_start_world_positions() -> Array:
+	var half_w: float = (terrain_width - 1) * cell_size * 0.5
+	var half_d: float = (terrain_depth - 1) * cell_size * 0.5
+	var positions: Array = []
+	for start in road_starts:
+		if _in_bounds(start):
+			positions.append(_grid_to_world(start, half_w, half_d))
+	return positions
 
 
 # ---------------------------------------------------------------------------
