@@ -1,0 +1,17 @@
+[] 3 Towers
+   - Magic missile tower 
+   - Wind tower 
+   - Spike wall
+   - Spring platform
+   - Molotov tower
+[] 2 Enemies
+   - Normal enemy
+   - Big enemy
+[] 5 abilities
+   - Gravity puller
+   - Boomerang
+   - Almighty push
+   - Grab enemy 
+   - Spider man grappling 
+[] Trees and rocks
+[] When losing, fall
