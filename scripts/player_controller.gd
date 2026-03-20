@@ -14,6 +14,13 @@ var _pending_explosion := false
 var _suck_timer := 0.0
 var _active_suck_area: Area3D = null
 
+var _birdeye := false
+var _birdeye_tween: Tween
+var _saved_cam_pos := Vector3(0, 0.5, 0)
+var _saved_cam_rot := Vector3.ZERO
+const BIRDEYE_HEIGHT := 80.0
+const BIRDEYE_ZOOM_DURATION := 0.6
+
 const EXPLOSION_PREFAB = preload("res://addons/ExplosionExport/Prefab.tscn")
 
 func _ready() -> void:
@@ -41,6 +48,13 @@ func _ready() -> void:
 	await get_tree().process_frame
 
 func _input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_B:
+		_toggle_birdeye()
+		return
+
+	if _birdeye:
+		return
+
 	if event is InputEventMouseMotion:
 		rotate_y(-event.relative.x * mouse_sensitivity)
 		if camera:
@@ -64,6 +78,10 @@ func _input(event: InputEvent) -> void:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 func _physics_process(delta: float) -> void:
+	if _birdeye:
+		velocity = Vector3.ZERO
+		return
+
 	if not is_on_floor():
 		velocity.y -= GRAVITY * delta
 
@@ -189,6 +207,30 @@ func _get_raycast_hit_point() -> Vector3:
 	if not ray_result:
 		return Vector3.INF
 	return ray_result.position
+
+func _toggle_birdeye() -> void:
+	if _birdeye_tween and _birdeye_tween.is_running():
+		return
+
+	_birdeye = not _birdeye
+
+	if _birdeye_tween:
+		_birdeye_tween.kill()
+
+	_birdeye_tween = create_tween().set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_CUBIC)
+	_birdeye_tween.set_parallel(true)
+
+	if _birdeye:
+		_stop_suck()
+		_pending_explosion = false
+		_saved_cam_pos = camera.position
+		_saved_cam_rot = camera.rotation
+		_birdeye_tween.tween_property(camera, "position", Vector3(0, BIRDEYE_HEIGHT, 0), BIRDEYE_ZOOM_DURATION)
+		_birdeye_tween.tween_property(camera, "rotation", Vector3(-PI / 2.0, 0, 0), BIRDEYE_ZOOM_DURATION)
+	else:
+		_birdeye_tween.tween_property(camera, "position", _saved_cam_pos, BIRDEYE_ZOOM_DURATION)
+		_birdeye_tween.tween_property(camera, "rotation", _saved_cam_rot, BIRDEYE_ZOOM_DURATION)
+
 
 func _get_bodies_in_sphere(center: Vector3, radius: float) -> Array[Node3D]:
 	var area = Area3D.new()

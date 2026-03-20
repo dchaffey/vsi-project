@@ -106,7 +106,11 @@ func spawn_enemies() -> void:
 		# Mesh
 		var mesh_instance = MeshInstance3D.new()
 		var capsule_mesh = CapsuleMesh.new()
+		var mat = StandardMaterial3D.new()
+		mat.albedo_color = Color(0.85, 0.85, 0.85)
+		capsule_mesh.material = mat
 		mesh_instance.mesh = capsule_mesh
+		enemy._material = mat
 		enemy.add_child(mesh_instance)
 		
 		# Collision
