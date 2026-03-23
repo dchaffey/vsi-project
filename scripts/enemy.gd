@@ -6,7 +6,7 @@ enum State { PATHING, RAGDOLL, RECOVERING, DEAD }
 var terrain: StaticBody3D
 
 ## Movement speed in world units per second.
-var move_speed: float = 15.0
+var move_speed: float = 10.0
 ## How strongly the enemy is pulled toward the terrain surface height.
 var height_correction_strength: float = 10.0
 ## Half-size of the axis-aligned rectangle around the goal used for arrival
@@ -176,14 +176,22 @@ func _update_color() -> void:
 		var t := clampf(1.0 - hp / max_hp, 0.0, 1.0)
 		_material.albedo_color = _COLOR_FULL_HP.lerp(_COLOR_LOW_HP, t)
 
-
 ## Teleport the enemy back to a random road start position.
 func _respawn_at_start() -> void:
 	if _start_positions.size() == 0:
 		return
 
 	var start_pos: Vector3 = _start_positions[_rng.randi_range(0, _start_positions.size() - 1)]
-	global_position = start_pos + Vector3(0.0, 2.0, 0.0)
+	var new_pos := start_pos + Vector3(0.0, 2.0, 0.0)
+
+	# Set position directly. In Godot 4, this is the standard way to teleport 
+	# a RigidBody3D from within _physics_process.
+	global_position = new_pos
+
+	# Stop the visual "zipping" effect caused by physics interpolation.
+	if has_method("reset_physics_interpolation"):
+		reset_physics_interpolation()
+
 	linear_velocity = Vector3.ZERO
 	angular_velocity = Vector3.ZERO
 	hp = max_hp
@@ -196,3 +204,4 @@ func _respawn_at_start() -> void:
 	_wander_timer = 0.0
 	_lock_angular_axes()
 	quaternion = Quaternion.IDENTITY
+
