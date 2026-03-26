@@ -16,6 +16,7 @@ var _active_suck_area: Area3D = null
 
 var _birdeye := false
 var _birdeye_tween: Tween
+var _is_locked := false
 var _saved_cam_pos := Vector3(0, 0.5, 0)
 var _saved_cam_rot := Vector3.ZERO
 const BIRDEYE_HEIGHT := 80.0
@@ -48,6 +49,9 @@ func _ready() -> void:
 	await get_tree().process_frame
 
 func _input(event: InputEvent) -> void:
+	if _is_locked:
+		return
+
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_B:
 		_toggle_birdeye()
 		return
@@ -78,6 +82,9 @@ func _input(event: InputEvent) -> void:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 func _physics_process(delta: float) -> void:
+	if _is_locked:
+		return
+
 	if _birdeye:
 		velocity = Vector3.ZERO
 		return

@@ -4,12 +4,15 @@ extends Area3D
 signal enemy_entered(enemy: Node3D)
 ## Emitted when HP changes.
 signal hp_changed(current: float, max_hp: float)
+## Emitted when HP reaches zero.
+signal game_over()
 
 ## Visual half-size of the cube in world units.
 var size: float = 4.0
 
 var max_hp: float = 1000.0
 var current_hp: float = 1000.0
+var _is_game_over: bool = false
 
 
 func _ready() -> void:
@@ -40,9 +43,16 @@ func _ready() -> void:
 
 
 func _on_body_entered(body: Node3D) -> void:
+	if _is_game_over:
+		return
+
 	if "hp" in body:
-		current_hp -= body.hp / 10.0
+		current_hp -= body.hp
 		current_hp = max(0.0, current_hp)
 		hp_changed.emit(current_hp, max_hp)
+		
+		if current_hp <= 0.0:
+			_is_game_over = true
+			game_over.emit()
 	
 	enemy_entered.emit(body)
