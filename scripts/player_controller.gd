@@ -4,6 +4,12 @@ var speed: float = 8.0
 var mouse_sensitivity: float = 0.002
 var jump_velocity: float = 6.0
 
+signal money_changed(new_amount: float)
+var money: float = 0.0:
+	set(val):
+		money = val
+		money_changed.emit(money)
+
 var explosion_force: float = 60.0
 var explosion_radius: float = 20.0
 
@@ -11,6 +17,7 @@ const GRAVITY = 19.6
 
 var camera: Camera3D
 var _pending_explosion := false
+var _pending_tower := false
 var _suck_timer := 0.0
 var _active_suck_area: Area3D = null
 
@@ -75,6 +82,9 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_E:
 		_start_suck()
 
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_T:
+		_pending_tower = true
+
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
 		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -114,6 +124,10 @@ func _physics_process(delta: float) -> void:
 		_pending_explosion = false
 		_explode_at_crosshair()
 
+	if _pending_tower:
+		_pending_tower = false
+		_spawn_tower_at_crosshair()
+
 	if _suck_timer > 0.0:
 		_suck_timer -= delta
 		_process_suck()
@@ -138,6 +152,19 @@ func _explode_at_crosshair() -> void:
 		if dir.is_zero_approx():
 			dir = Vector3.UP
 		body.apply_central_impulse(dir * explosion_force * falloff)
+
+func _spawn_tower_at_crosshair() -> void:
+	var hit_point = _get_raycast_hit_point()
+	if hit_point == Vector3.INF:
+		return
+	
+	var tower = StaticBody3D.new()
+	# Sink it slightly so the base blends into the ground, like in world.gd
+	tower.position = hit_point + Vector3(0.0, -2.0, 0.0)
+	tower.set_script(load("res://scripts/towers/tower.gd"))
+	
+	get_parent().add_child(tower)
+	print("Tower spawned at: ", hit_point)
 
 func _spawn_explosion(_pos: Vector3) -> void:
 	var explosion = EXPLOSION_PREFAB.instantiate()

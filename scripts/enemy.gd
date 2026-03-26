@@ -2,6 +2,9 @@ extends RigidBody3D
 
 enum State { PATHING, RAGDOLL, RECOVERING, DEAD }
 
+## Emitted when the enemy dies.
+signal died(max_hp: float)
+
 ## Reference to the terrain node (set by the spawner).
 var terrain: StaticBody3D
 ## Reference to the defence objective (set by the spawner).
@@ -154,6 +157,7 @@ func _enter_dead() -> void:
 	_state = State.DEAD
 	_unlock_angular_axes()
 	_update_color()
+	died.emit(max_hp)
 
 
 func _process_dead(delta: float) -> void:

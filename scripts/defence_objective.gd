@@ -47,7 +47,7 @@ func _on_body_entered(body: Node3D) -> void:
 		return
 
 	if "hp" in body:
-		current_hp -= body.hp
+		current_hp -= body.hp / 10
 		current_hp = max(0.0, current_hp)
 		hp_changed.emit(current_hp, max_hp)
 		

@@ -474,7 +474,7 @@ func _smooth_path_heights(map: Array, path: Array) -> PackedFloat64Array:
 	for _pass in range(3):
 		var prev := smoothed.duplicate()
 		for i in range(smoothed.size()):
-			var lo := maxi(0, i - window / 2.0)
+			var lo : int = maxi(0, i - window / 2.0)
 			var hi := mini(smoothed.size() - 1, i + window / 2.0)
 			var sum := 0.0
 			for j in range(lo, hi + 1):

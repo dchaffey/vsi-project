@@ -3,6 +3,7 @@ extends Node3D
 var terrain: StaticBody3D
 var defence_objective: Area3D
 var player: CharacterBody3D
+var hud: CanvasLayer
 
 func _ready() -> void:
 	# Boost global gravity programmatically (optional but effective)
@@ -21,7 +22,7 @@ func _ready() -> void:
 	spawn_enemies()
 	spawn_player()
 	spawn_hud()
-	spawn_tower()
+
 
 # func _process(delta: float) -> void:
 # 	print("FPS %d" % Engine.get_frames_per_second())
@@ -41,6 +42,7 @@ func spawn_objectives() -> void:
 	var goal_y: float = terrain.get_height_at(pos_def_obj.x, pos_def_obj.z)
 	defence_objective.position = Vector3(pos_def_obj.x, goal_y + 2.0, pos_def_obj.z)
 	defence_objective.set_script(load("res://scripts/defence_objective.gd"))
+	defence_objective.game_over.connect(_on_game_over)
 	add_child(defence_objective)
 	print("Defence objective spawned at goal.")
 
@@ -100,95 +102,18 @@ func spawn_player() -> void:
 	print("Player spawned with first-person camera.")
 
 func spawn_hud() -> void:
-	var canvas = CanvasLayer.new()
-	var crosshair = ColorRect.new()
-	
-	# Small 4x4 dot in the center
-	crosshair.size = Vector2(4, 4)
-	crosshair.color = Color.WHITE
-	
-	# Use standard layout properties to center it
-	crosshair.set_anchors_preset(Control.PRESET_CENTER)
-	crosshair.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	crosshair.grow_vertical = Control.GROW_DIRECTION_BOTH
-	
-	canvas.add_child(crosshair)
-	
-	# --- Objective HP Label ---
-	var hp_label := Label.new()
-	hp_label.name = "HPLabel"
-	hp_label.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	hp_label.position = Vector2(20, 20)
-	hp_label.add_theme_font_size_override("font_size", 32)
-	
-	# Initial value
-	if defence_objective:
-		hp_label.text = "Objective HP: %d / %d" % [defence_objective.current_hp, defence_objective.max_hp]
-		defence_objective.hp_changed.connect(func(curr, max_hp):
-			hp_label.text = "Objective HP: %d / %d" % [curr, max_hp]
-		)
-		defence_objective.game_over.connect(_on_game_over)
-	
-	canvas.add_child(hp_label)
-	
-	add_child(canvas)
-	print("Crosshair and HP Label spawned.")
+	hud = CanvasLayer.new()
+	hud.set_script(load("res://scripts/hud.gd"))
+	add_child(hud)
+	hud.initialize(player, defence_objective)
+	print("HUD spawned and initialized.")
 
 func _on_game_over() -> void:
 	if player:
 		player._is_locked = true
 	
-	var canvas = CanvasLayer.new()
-	canvas.layer = 100 # Ensure it's on top
-	
-	var overlay = ColorRect.new()
-	overlay.color = Color(0, 0, 0, 0.7)
-	overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
-	canvas.add_child(overlay)
-	
-	var center_container = CenterContainer.new()
-	center_container.set_anchors_preset(Control.PRESET_FULL_RECT)
-	canvas.add_child(center_container)
-	
-	var v_box = VBoxContainer.new()
-	center_container.add_child(v_box)
-	
-	var label = Label.new()
-	label.text = "GAME OVER"
-	label.add_theme_font_size_override("font_size", 64)
-	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	v_box.add_child(label)
-	
-	var spacer = Control.new()
-	spacer.custom_minimum_size = Vector2(0, 20)
-	v_box.add_child(spacer)
-	
-	var restart_button = Button.new()
-	restart_button.text = "RESTART"
-	restart_button.custom_minimum_size = Vector2(200, 60)
-	restart_button.add_theme_font_size_override("font_size", 32)
-	restart_button.pressed.connect(func():
-		get_tree().reload_current_scene()
-	)
-	v_box.add_child(restart_button)
-	
-	var quit_spacer = Control.new()
-	quit_spacer.custom_minimum_size = Vector2(0, 10)
-	v_box.add_child(quit_spacer)
-	
-	var quit_button = Button.new()
-	quit_button.text = "QUIT"
-	quit_button.custom_minimum_size = Vector2(200, 60)
-	quit_button.add_theme_font_size_override("font_size", 32)
-	quit_button.pressed.connect(func():
-		get_tree().quit()
-	)
-	v_box.add_child(quit_button)
-	
-	add_child(canvas)
-	
-	# Unlock mouse
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	if hud:
+		hud.show_game_over()
 
 
 func spawn_enemies() -> void:
@@ -233,6 +158,12 @@ func spawn_enemies() -> void:
 		var shape = CapsuleShape3D.new()
 		collision_shape.shape = shape
 		enemy.add_child(collision_shape)
+
+		# Award money on death
+		enemy.died.connect(func(m_hp):
+			if player:
+				player.money += m_hp / 100.0
+		)
 
 		add_child(enemy)
 
@@ -284,16 +215,4 @@ func spawn_walls() -> void:
 
 		add_child(static_body)
 
-	print("Walls spawned around the terrain.")
-
-func spawn_tower() -> void:
-	var tower = StaticBody3D.new()
-	# Place at terrain center, sunk slightly so the base blends into the ground
-	var tower_x := 0.0
-	var tower_z := 0.0
-	var tower_y: float = terrain.get_height_at(tower_x, tower_z) - 2.0
-	tower.position = Vector3(tower_x, tower_y, tower_z)
-	tower.set_script(load("res://scripts/tower.gd"))
-	
-	add_child(tower)
-	print("Tower spawned in the middle of the terrain.")
+		print("Walls spawned around the terrain.")
