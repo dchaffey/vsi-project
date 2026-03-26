@@ -4,14 +4,13 @@ enum State { PATHING, RAGDOLL, RECOVERING, DEAD }
 
 ## Reference to the terrain node (set by the spawner).
 var terrain: StaticBody3D
+## Reference to the defence objective (set by the spawner).
+var defence_objective: Area3D
 
 ## Movement speed in world units per second.
 var move_speed: float = 10.0
 ## How strongly the enemy is pulled toward the terrain surface height.
 var height_correction_strength: float = 10.0
-## Half-size of the axis-aligned rectangle around the goal used for arrival
-## detection (in world units).
-var goal_reach_half_size: float = 2.0
 
 ## HP and impact damage.
 var hp: float = 100.0
@@ -19,8 +18,6 @@ var max_hp: float = 100.0
 var impact_damage_threshold: float = 15.0
 var impact_damage_scale: float = 2.0
 
-## Cached goal position (world space, XZ only).
-var _goal_pos := Vector3.ZERO
 ## Cached start positions (world space).
 var _start_positions: Array = []
 ## RNG for picking a random start on respawn.
@@ -43,14 +40,14 @@ var _wander_timer: float = 0.0
 func _ready() -> void:
 	_rng.randomize()
 	_lock_angular_axes()
-	if terrain:
-		_goal_pos = terrain.get_goal_world_position()
-		_start_positions = terrain.get_start_world_positions()
+	assert(terrain != null)
+	assert(defence_objective != null)
+	_start_positions = terrain.get_start_world_positions()
+	defence_objective.enemy_entered.connect(_on_defence_objective_entered)
 
 
 func _physics_process(delta: float) -> void:
-	if not terrain:
-		return
+	assert(terrain != null)
 
 	var pos := global_position
 
@@ -76,12 +73,6 @@ func _physics_process(delta: float) -> void:
 		else:
 			_update_color()
 	_prev_velocity = linear_velocity
-
-	# --- Goal arrival check (runs in all states) ---
-	if absf(pos.x - _goal_pos.x) < goal_reach_half_size \
-		and absf(pos.z - _goal_pos.z) < goal_reach_half_size:
-		_respawn_at_start()
-
 
 func _process_pathing(delta: float, pos: Vector3) -> void:
 	# --- Wander: smoothly drift a random angular offset ---
@@ -175,6 +166,11 @@ func _update_color() -> void:
 	if _material:
 		var t := clampf(1.0 - hp / max_hp, 0.0, 1.0)
 		_material.albedo_color = _COLOR_FULL_HP.lerp(_COLOR_LOW_HP, t)
+
+func _on_defence_objective_entered(body: Node3D) -> void:
+	if body == self:
+		_respawn_at_start()
+
 
 ## Teleport the enemy back to a random road start position.
 func _respawn_at_start() -> void:

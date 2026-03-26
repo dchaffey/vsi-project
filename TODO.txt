@@ -13,5 +13,9 @@
    - Almighty push
    - Grab enemy 
    - Spider man grappling 
+[] Simple ui elements
+   - Enemy HP
+   - Currency
+   - Base HP
 [] Trees and rocks
 [] When losing, fall

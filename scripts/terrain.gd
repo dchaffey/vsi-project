@@ -164,6 +164,12 @@ func _rebuild() -> void:
 
 ## Remove old indicators and spawn fresh spheres for each start and the goal.
 func _spawn_indicators() -> void:
+	if not Engine.is_editor_hint():
+		# Remove any indicator spheres that were saved into the scene file.
+		for child in get_children():
+			if child is MeshInstance3D and child.mesh is SphereMesh:
+				child.queue_free()
+		return
 	# Remove previous indicators
 	for child in get_children():
 		if child.is_in_group("_terrain_indicator"):

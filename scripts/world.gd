@@ -1,6 +1,7 @@
 extends Node3D
 
 var terrain: StaticBody3D
+var defence_objective: Area3D
 
 func _ready() -> void:
 	# Boost global gravity programmatically (optional but effective)
@@ -8,15 +9,53 @@ func _ready() -> void:
 	
 	spawn_environment()
 	spawn_sunlight()
+
+
+	# Must happen in this order
 	spawn_terrain()
+	spawn_objectives()
+
+
 	spawn_walls()
 	spawn_enemies()
 	spawn_player()
-	spawn_crosshair()
+	spawn_hud()
 	spawn_tower()
 
 # func _process(delta: float) -> void:
 # 	print("FPS %d" % Engine.get_frames_per_second())
+
+func spawn_objectives() -> void:
+	# Half-extents (same as mesh construction) for grid -> world conversion
+	assert(terrain != null, "Terrain should be initialized before.")
+
+	var half_w: float = (terrain.terrain_width - 1) * terrain.cell_size * 0.5
+	var half_d: float = (terrain.terrain_depth - 1) * terrain.cell_size * 0.5
+
+	# Defence objective cube at the goal position
+	assert(terrain._in_bounds(terrain.road_goal), "We should assume that positions have been places correctly.")
+	var pos_def_obj : Vector3 = terrain._grid_to_world(terrain.road_goal, half_w, half_d)
+	defence_objective = Area3D.new()
+	defence_objective.name = "DefenceObjective"
+	var goal_y: float = terrain.get_height_at(pos_def_obj.x, pos_def_obj.z)
+	defence_objective.position = Vector3(pos_def_obj.x, goal_y + 2.0, pos_def_obj.z)
+	defence_objective.set_script(load("res://scripts/defence_objective.gd"))
+	add_child(defence_objective)
+	print("Defence objective spawned at goal.")
+
+	# Enemy spawn markers
+	var enemy_spawn_script = load("res://scripts/enemy_spawn.gd")
+	for i in range(terrain.road_starts.size()):
+		var start: Vector2i = terrain.road_starts[i]
+		assert(terrain._in_bounds(start))
+		var pos_enemy_spawn : Vector3 = terrain._grid_to_world(start, half_w, half_d)
+		var spawn_y: float = terrain.get_height_at(pos_enemy_spawn.x, pos_enemy_spawn.z)
+		var enemy_spawn := Node3D.new()
+		enemy_spawn.name = "EnemySpawn_%d" % i
+		enemy_spawn.position = Vector3(pos_enemy_spawn.x, spawn_y + 2.0, pos_enemy_spawn.z)
+		enemy_spawn.set_script(enemy_spawn_script)
+		add_child(enemy_spawn)
+	print("Enemy spawns placed.")
 
 func spawn_environment() -> void:
 	var world_env = WorldEnvironment.new()
@@ -59,7 +98,7 @@ func spawn_player() -> void:
 	add_child(player)
 	print("Player spawned with first-person camera.")
 
-func spawn_crosshair() -> void:
+func spawn_hud() -> void:
 	var canvas = CanvasLayer.new()
 	var crosshair = ColorRect.new()
 	
@@ -73,8 +112,25 @@ func spawn_crosshair() -> void:
 	crosshair.grow_vertical = Control.GROW_DIRECTION_BOTH
 	
 	canvas.add_child(crosshair)
+	
+	# --- Objective HP Label ---
+	var hp_label := Label.new()
+	hp_label.name = "HPLabel"
+	hp_label.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	hp_label.position = Vector2(20, 20)
+	hp_label.add_theme_font_size_override("font_size", 32)
+	
+	# Initial value
+	if defence_objective:
+		hp_label.text = "Objective HP: %d / %d" % [defence_objective.current_hp, defence_objective.max_hp]
+		defence_objective.hp_changed.connect(func(curr, max_hp):
+			hp_label.text = "Objective HP: %d / %d" % [curr, max_hp]
+		)
+	
+	canvas.add_child(hp_label)
+	
 	add_child(canvas)
-	print("Crosshair spawned.")
+	print("Crosshair and HP Label spawned.")
 
 
 func spawn_enemies() -> void:
@@ -102,6 +158,7 @@ func spawn_enemies() -> void:
 		# Attach the enemy AI script
 		enemy.set_script(enemy_script)
 		enemy.terrain = terrain
+		enemy.defence_objective = defence_objective
 	
 		# Mesh
 		var mesh_instance = MeshInstance3D.new()
