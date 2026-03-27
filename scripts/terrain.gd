@@ -78,6 +78,8 @@ extends StaticBody3D
 		indicator_radius = v
 		_queue_rebuild()
 
+signal flow_field_changed
+
 var height_map: Array = [] # 2D array [x][z] of floats
 var _is_ready := false
 # Per-vertex road blend factor [x][z] in [0, 1]. 1 = full road, 0 = terrain.
@@ -93,6 +95,8 @@ var flow_field: Array = []
 var path_distance: Array = []
 ## Whether the flow field has been computed. Once true, rebuilds skip recomputation.
 var _flow_field_built := false
+## Walkability grid. False for cells blocked by placed obstacles.
+var _walkable: Array = []  # [x][z] of bool
 
 
 func _ready() -> void:
@@ -507,16 +511,21 @@ func _build_flow_field(paths: Array) -> void:
 	# Initialise grids
 	flow_field = []
 	path_distance = []
+	_walkable = []
 	for x in range(terrain_width):
 		var flow_row: Array = []
 		flow_row.resize(terrain_depth)
 		var dist_row: Array = []
 		dist_row.resize(terrain_depth)
+		var walk_row: Array = []
+		walk_row.resize(terrain_depth)
 		for z in range(terrain_depth):
 			flow_row[z] = Vector2.ZERO
 			dist_row[z] = INF
+			walk_row[z] = true
 		flow_field.append(flow_row)
 		path_distance.append(dist_row)
+		_walkable.append(walk_row)
 
 	if paths.size() == 0:
 		print("Flow field: no paths provided, field left empty.")
@@ -720,6 +729,124 @@ func get_path_distance(wx: float, wz: float) -> float:
 ## Uses a small threshold (0.5 grid cells) to account for interpolation.
 func is_on_road(wx: float, wz: float) -> bool:
 	return get_path_distance(wx, wz) < 0.5
+
+
+## Locally patches the flow field around a placed obstacle using proper
+## invalidation + re-propagation so the "shadow" behind the obstacle is
+## correctly rerouted rather than left pointing into a wall.
+func deflect_obstacle(world_x: float, world_z: float, inner_radius: float, _outer_radius: float) -> void:
+	if flow_field.size() == 0:
+		return
+
+	var all_dirs := [
+		Vector2i(-1, 0), Vector2i(1, 0), Vector2i(0, -1), Vector2i(0, 1),
+		Vector2i(-1, -1), Vector2i(-1, 1), Vector2i(1, -1), Vector2i(1, 1),
+	]
+
+	var half_w: float = (terrain_width - 1) * cell_size * 0.5
+	var half_d: float = (terrain_depth - 1) * cell_size * 0.5
+	var g := _world_to_grid(world_x, world_z)
+	var cx := int(round(g.x))
+	var cz := int(round(g.y))
+	var grid_r := int(ceil(inner_radius / cell_size)) + 1
+
+	# ---- Step 1: Place obstacle, collect immediate dependents ----
+	var invalidation_queue: Array[Vector2i] = []
+	var in_queue: Dictionary = {}
+
+	for dx in range(-grid_r, grid_r + 1):
+		for dz in range(-grid_r, grid_r + 1):
+			var gx := cx + dx
+			var gz := cz + dz
+			if not _in_bounds(Vector2i(gx, gz)):
+				continue
+			var cell_wx: float = gx * cell_size - half_w
+			var cell_wz: float = gz * cell_size - half_d
+			var dist: float = Vector2(cell_wx - world_x, cell_wz - world_z).length()
+			if dist > inner_radius:
+				continue
+			# Road cells are immovable anchors — never block them
+			if path_distance[gx][gz] == 0.0:
+				continue
+
+			_walkable[gx][gz] = false
+			flow_field[gx][gz] = Vector2.ZERO
+			path_distance[gx][gz] = INF
+
+			# Any walkable neighbour whose flow was pointing INTO this cell
+			# now has a broken path — it needs re-evaluation.
+			for dir in all_dirs:
+				var nb := Vector2i(gx + dir.x, gz + dir.y)
+				if not _in_bounds(nb) or not _walkable[nb.x][nb.y]:
+					continue
+				var expected := Vector2(float(gx - nb.x), float(gz - nb.y)).normalized()
+				if flow_field[nb.x][nb.y].dot(expected) > 0.9 and not in_queue.has(nb):
+					invalidation_queue.append(nb)
+					in_queue[nb] = true
+
+	# ---- Step 2: Ripple invalidation through the shadow ----
+	var broken_cells: Array[Vector2i] = []
+	var qi := 0
+	while qi < invalidation_queue.size():
+		var cell: Vector2i = invalidation_queue[qi]
+		qi += 1
+
+		# Skip if already invalidated (obstacle cell) or a road anchor
+		if not _walkable[cell.x][cell.y] or path_distance[cell.x][cell.y] == 0.0:
+			continue
+
+		path_distance[cell.x][cell.y] = INF
+		flow_field[cell.x][cell.y] = Vector2.ZERO
+		broken_cells.append(cell)
+
+		for dir in all_dirs:
+			var nb := Vector2i(cell.x + dir.x, cell.y + dir.y)
+			if not _in_bounds(nb) or not _walkable[nb.x][nb.y]:
+				continue
+			if path_distance[nb.x][nb.y] == 0.0:
+				continue  # Road anchor — never invalidate
+			var expected := Vector2(float(cell.x - nb.x), float(cell.y - nb.y)).normalized()
+			if flow_field[nb.x][nb.y].dot(expected) > 0.9 and not in_queue.has(nb):
+				invalidation_queue.append(nb)
+				in_queue[nb] = true
+
+	# ---- Step 3: Re-propagate from the valid perimeter ----
+	# Use a plain array as a BFS queue (costs are 1 or sqrt(2) — consistent
+	# ordering from the perimeter is enough to get correct distances).
+	var prop_queue: Array[Vector2i] = []
+	var prop_in_queue: Dictionary = {}
+
+	for cell in broken_cells:
+		for dir in all_dirs:
+			var nb := Vector2i(cell.x + dir.x, cell.y + dir.y)
+			if not _in_bounds(nb) or not _walkable[nb.x][nb.y]:
+				continue
+			if path_distance[nb.x][nb.y] == INF:
+				continue  # Still broken — not a valid seed
+			if not prop_in_queue.has(nb):
+				prop_queue.append(nb)
+				prop_in_queue[nb] = true
+
+	var pi := 0
+	while pi < prop_queue.size():
+		var cell: Vector2i = prop_queue[pi]
+		pi += 1
+		var current_dist: float = path_distance[cell.x][cell.y]
+
+		for dir in all_dirs:
+			var nb := Vector2i(cell.x + dir.x, cell.y + dir.y)
+			if not _in_bounds(nb) or not _walkable[nb.x][nb.y]:
+				continue
+			var step: float = 1.0 if (dir.x == 0 or dir.y == 0) else 1.41421356
+			var new_dist: float = current_dist + step
+			if new_dist < path_distance[nb.x][nb.y]:
+				path_distance[nb.x][nb.y] = new_dist
+				flow_field[nb.x][nb.y] = Vector2(float(cell.x - nb.x), float(cell.y - nb.y)).normalized()
+				if not prop_in_queue.has(nb):
+					prop_queue.append(nb)
+					prop_in_queue[nb] = true
+
+	flow_field_changed.emit()
 
 
 ## Returns the world-space position of the road goal (Vector3, Y = terrain height).

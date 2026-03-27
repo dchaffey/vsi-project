@@ -15,6 +15,7 @@ var explosion_radius: float = 20.0
 
 const GRAVITY = 19.6
 
+var terrain: StaticBody3D = null
 var camera: Camera3D
 var _pending_explosion := false
 var _pending_tower := false
@@ -157,13 +158,17 @@ func _spawn_tower_at_crosshair() -> void:
 	var hit_point = _get_raycast_hit_point()
 	if hit_point == Vector3.INF:
 		return
-	
+	if terrain and terrain.get_path_distance(hit_point.x, hit_point.z) < 8.0:
+		return
+
 	var tower = StaticBody3D.new()
 	# Sink it slightly so the base blends into the ground, like in world.gd
 	tower.position = hit_point + Vector3(0.0, -2.0, 0.0)
 	tower.set_script(load("res://scripts/towers/tower.gd"))
 	
 	get_parent().add_child(tower)
+	if terrain:
+		terrain.deflect_obstacle(hit_point.x, hit_point.z, 2.5, 8.0)
 	print("Tower spawned at: ", hit_point)
 
 func _spawn_explosion(_pos: Vector3) -> void:

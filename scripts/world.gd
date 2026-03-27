@@ -22,6 +22,7 @@ func _ready() -> void:
 	spawn_enemies()
 	spawn_player()
 	spawn_hud()
+	spawn_flow_debug()
 
 
 # func _process(delta: float) -> void:
@@ -99,6 +100,7 @@ func spawn_player() -> void:
 	player.set_script(load("res://scripts/player_controller.gd"))
 	
 	add_child(player)
+	player.terrain = terrain
 	print("Player spawned with first-person camera.")
 
 func spawn_hud() -> void:
@@ -166,6 +168,59 @@ func spawn_enemies() -> void:
 		)
 
 		add_child(enemy)
+
+var _flow_debug_mi: MeshInstance3D
+var _flow_debug_mat: StandardMaterial3D
+
+func spawn_flow_debug() -> void:
+	_flow_debug_mi = MeshInstance3D.new()
+	_flow_debug_mi.name = "FlowDebug"
+	_flow_debug_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+	_flow_debug_mat = StandardMaterial3D.new()
+	_flow_debug_mat.albedo_color = Color(1.0, 0.2, 0.2)
+	_flow_debug_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_flow_debug_mat.no_depth_test = true
+	_flow_debug_mi.material_override = _flow_debug_mat
+
+	add_child(_flow_debug_mi)
+	_rebuild_flow_debug()
+	terrain.flow_field_changed.connect(_rebuild_flow_debug)
+	print("Flow debug arrows spawned.")
+
+func _rebuild_flow_debug() -> void:
+	var half_w: float = (terrain.terrain_width - 1) * terrain.cell_size * 0.5
+	var half_d: float = (terrain.terrain_depth - 1) * terrain.cell_size * 0.5
+	var step := 3
+	var arrow_len := 1.5
+	var lift := 0.3
+
+	var mesh := ImmediateMesh.new()
+	mesh.surface_begin(Mesh.PRIMITIVE_LINES)
+	for gx in range(0, terrain.terrain_width, step):
+		for gz in range(0, terrain.terrain_depth, step):
+			var wx: float = gx * terrain.cell_size - half_w
+			var wz: float = gz * terrain.cell_size - half_d
+			var flow: Vector2 = terrain.get_flow_direction(wx, wz)
+			if flow.length_squared() < 0.001:
+				continue
+			var wy: float = terrain.get_height_at(wx, wz) + lift
+			var origin := Vector3(wx, wy, wz)
+			var dir3 := Vector3(flow.x, 0, flow.y).normalized() * arrow_len
+			var tip := origin + dir3
+
+			# Shaft
+			mesh.surface_add_vertex(origin)
+			mesh.surface_add_vertex(tip)
+
+			# Arrowhead wings
+			var right := dir3.cross(Vector3.UP).normalized() * 0.3
+			mesh.surface_add_vertex(tip)
+			mesh.surface_add_vertex(tip - dir3 * 0.3 + right)
+			mesh.surface_add_vertex(tip)
+			mesh.surface_add_vertex(tip - dir3 * 0.3 - right)
+	mesh.surface_end()
+	_flow_debug_mi.mesh = mesh
 
 func spawn_walls() -> void:
 	var wall_height = 30.0
