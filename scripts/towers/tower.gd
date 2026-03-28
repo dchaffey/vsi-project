@@ -39,7 +39,7 @@ func _physics_process(delta: float) -> void:
 	shoot_timer += delta
 	if shoot_timer >= shoot_interval:
 		shoot_timer = 0.0
-		#_shoot_at_enemies()
+		_shoot_at_enemies()
 
 func _shoot_at_enemies() -> void:
 	var enemies = await _get_enemies_in_range(global_position, range_radius)

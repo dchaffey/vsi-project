@@ -78,6 +78,19 @@ func _physics_process(delta: float) -> void:
 	_prev_velocity = linear_velocity
 
 func _process_pathing(delta: float, pos: Vector3) -> void:
+	# --- Transition to RAGDOLL on strong impulse ---
+	# Must check BEFORE velocity correction so external impulses (suck, explosion)
+	# are not overwritten by the lerp before the threshold is evaluated.
+	var _vel_len := linear_velocity.length()
+	if _vel_len > move_speed * 1.5:
+		print("[ENEMY] ", name, " vel=", snapped(_vel_len, 0.1), " threshold=", move_speed * 2.0)
+	if _vel_len > move_speed * 2.0:
+		print("[ENEMY] ", name, " → RAGDOLL at vel=", snapped(_vel_len, 0.1))
+		_state = State.RAGDOLL
+		_settle_timer = 0.0
+		_unlock_angular_axes()
+		return
+
 	# --- Wander: smoothly drift a random angular offset ---
 	_wander_timer -= delta
 	if _wander_timer <= 0.0:
@@ -103,12 +116,6 @@ func _process_pathing(delta: float, pos: Vector3) -> void:
 	var y_error: float = target_y - pos.y
 	if absf(y_error) < 5.0:
 		linear_velocity.y += y_error * height_correction_strength * delta
-
-	# --- Transition to RAGDOLL on strong impulse ---
-	if linear_velocity.length() > move_speed * 2.0:
-		_state = State.RAGDOLL
-		_settle_timer = 0.0
-		_unlock_angular_axes()
 
 
 func _process_ragdoll(delta: float) -> void:

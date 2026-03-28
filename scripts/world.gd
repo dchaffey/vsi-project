@@ -4,6 +4,7 @@ var terrain: StaticBody3D
 var defence_objective: Area3D
 var player: CharacterBody3D
 var hud: CanvasLayer
+var enemy_spawns: Array = []  # all EnemySpawn nodes — populated in spawn_objectives
 
 func _ready() -> void:
 	# Boost global gravity programmatically (optional but effective)
@@ -16,13 +17,11 @@ func _ready() -> void:
 	# Must happen in this order
 	spawn_terrain()
 	spawn_objectives()
-
-
 	spawn_walls()
+	spawn_player()  # must precede spawn_enemies so player ref is valid for die rewards
 	spawn_enemies()
-	spawn_player()
 	spawn_hud()
-	spawn_flow_debug()
+	# spawn_flow_debug()
 
 
 # func _process(delta: float) -> void:
@@ -47,18 +46,21 @@ func spawn_objectives() -> void:
 	add_child(defence_objective)
 	print("Defence objective spawned at goal.")
 
-	# Enemy spawn markers
+	# Enemy spawn markers — each node owns per-spawn enemy creation
 	var enemy_spawn_script = load("res://scripts/enemy_spawn.gd")
 	for i in range(terrain.road_starts.size()):
 		var start: Vector2i = terrain.road_starts[i]
 		assert(terrain._in_bounds(start))
-		var pos_enemy_spawn : Vector3 = terrain._grid_to_world(start, half_w, half_d)
+		var pos_enemy_spawn: Vector3 = terrain._grid_to_world(start, half_w, half_d)
 		var spawn_y: float = terrain.get_height_at(pos_enemy_spawn.x, pos_enemy_spawn.z)
 		var enemy_spawn := Node3D.new()
 		enemy_spawn.name = "EnemySpawn_%d" % i
 		enemy_spawn.position = Vector3(pos_enemy_spawn.x, spawn_y + 2.0, pos_enemy_spawn.z)
 		enemy_spawn.set_script(enemy_spawn_script)
 		add_child(enemy_spawn)
+		enemy_spawn.terrain = terrain
+		enemy_spawn.defence_objective = defence_objective
+		enemy_spawns.append(enemy_spawn)
 	print("Enemy spawns placed.")
 
 func spawn_environment() -> void:
@@ -119,54 +121,14 @@ func _on_game_over() -> void:
 
 
 func spawn_enemies() -> void:
-	var rng = RandomNumberGenerator.new()
-	var start_positions: Array = terrain.get_start_world_positions()
-	if start_positions.size() == 0:
-		print("No road starts — skipping enemy spawn.")
-		return
+	assert(enemy_spawns.size() > 0, "No enemy spawns — call spawn_objectives first.")
 
-	var enemy_script = load("res://scripts/enemy.gd")
-
+	var rng := RandomNumberGenerator.new()
+	# Distribute 30 enemies round-robin across all spawn points
 	for i in range(30):
-		var enemy = RigidBody3D.new()
-		# Pick a random road start and offset slightly so they don't all stack
-		var start_pos: Vector3 = start_positions[rng.randi_range(0, start_positions.size() - 1)]
-		var x: float = start_pos.x + rng.randf_range(-2.0, 2.0)
-		var z: float = start_pos.z + rng.randf_range(-2.0, 2.0)
-		var y: float = terrain.get_height_at(x, z) + 2.0
-		enemy.position = Vector3(x, y, z)
-		enemy.mass = 1.0
-		enemy.name = "Enemy_" + str(i)
-		enemy.collision_layer = 2 # Layer 2
-		enemy.collision_mask = 1 | 2 | 4 # Ground, Enemies, Player
-
-		# Attach the enemy AI script
-		enemy.set_script(enemy_script)
-		enemy.terrain = terrain
-		enemy.defence_objective = defence_objective
-	
-		# Mesh
-		var mesh_instance = MeshInstance3D.new()
-		var capsule_mesh = CapsuleMesh.new()
-		var mat = StandardMaterial3D.new()
-		mat.albedo_color = Color(0.85, 0.85, 0.85)
-		capsule_mesh.material = mat
-		mesh_instance.mesh = capsule_mesh
-		enemy._material = mat
-		enemy.add_child(mesh_instance)
-		
-		# Collision
-		var collision_shape = CollisionShape3D.new()
-		var shape = CapsuleShape3D.new()
-		collision_shape.shape = shape
-		enemy.add_child(collision_shape)
-
-		# Award money on death
-		enemy.died.connect(func(m_hp):
-			if player:
-				player.money += m_hp / 100.0
-		)
-
+		var spawn_node = enemy_spawns[i % enemy_spawns.size()]  # round-robin assignment
+		spawn_node.player = player  # player is guaranteed set before this call
+		var enemy: RigidBody3D = spawn_node.spawn_enemy(i, rng)
 		add_child(enemy)
 
 var _flow_debug_mi: MeshInstance3D

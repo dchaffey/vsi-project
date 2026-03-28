@@ -1,8 +1,8 @@
 extends CharacterBody3D
 
-var speed: float = 8.0
 var mouse_sensitivity: float = 0.002
-var jump_velocity: float = 6.0
+var zoom_speed: float = 1.1 # Multiplier
+var rotation_sensitivity: float = 0.005
 
 signal money_changed(new_amount: float)
 var money: float = 0.0:
@@ -13,121 +13,107 @@ var money: float = 0.0:
 var explosion_force: float = 60.0
 var explosion_radius: float = 20.0
 
-const GRAVITY = 19.6
-
 var terrain: StaticBody3D = null
 var camera: Camera3D
+
+var _zoom_level: float = 80.0
+var _min_zoom: float = 10.0
+var _max_zoom: float = 300.0
+
+var _suck_timer := 0.0
+var _active_suck_area: Area3D = null  ## persistent sphere for suck detection
 var _pending_explosion := false
 var _pending_tower := false
-var _suck_timer := 0.0
-var _active_suck_area: Area3D = null
 
-var _birdeye := false
-var _birdeye_tween: Tween
-var _is_locked := false
-var _saved_cam_pos := Vector3(0, 0.5, 0)
-var _saved_cam_rot := Vector3.ZERO
-const BIRDEYE_HEIGHT := 80.0
-const BIRDEYE_ZOOM_DURATION := 0.6
+var _placement_script: String = ""
+var _ghost_tower: Node3D = null
 
 const EXPLOSION_PREFAB = preload("res://addons/ExplosionExport/Prefab.tscn")
 
 func _ready() -> void:
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	
-	# Self-build: Mesh
-	var mesh_instance = MeshInstance3D.new()
-	var capsule_mesh = CapsuleMesh.new()
-	mesh_instance.mesh = capsule_mesh
-	add_child(mesh_instance)
-	
-	# Self-build: Collision
-	var collision_shape = CollisionShape3D.new()
-	var shape = CapsuleShape3D.new()
-	collision_shape.shape = shape
-	add_child(collision_shape)
-	
-	# Self-build: Camera
+	# Camera setup
 	camera = Camera3D.new()
 	camera.name = "Camera3D"
-	camera.position = Vector3(0, 0.5, 0) # Near eye level
 	add_child(camera)
 	camera.make_current()
+	
+	# Initial position/rotation (Bird's eye)
+	# Set a slight angle so it's not looking perfectly straight down (more RTS feel)
+	camera.rotation.x = -PI / 2.5
+	_update_camera_position()
 
 	await get_tree().process_frame
 
+func _unhandled_input(event: InputEvent) -> void:
+	if _ghost_tower and event is InputEventMouseButton and event.pressed:
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			_confirm_placement()
+			get_viewport().set_input_as_handled()
+			return
+		elif event.button_index == MOUSE_BUTTON_RIGHT:
+			cancel_placement()
+			get_viewport().set_input_as_handled()
+			return
+
 func _input(event: InputEvent) -> void:
-	if _is_locked:
-		return
+	# Zoom
+	if event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			_zoom_level = clamp(_zoom_level / zoom_speed, _min_zoom, _max_zoom)
+			_update_camera_position()
+		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			_zoom_level = clamp(_zoom_level * zoom_speed, _min_zoom, _max_zoom)
+			_update_camera_position()
 
-	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_B:
-		_toggle_birdeye()
-		return
-
-	if _birdeye:
-		return
-
+	# Pan & Rotate
 	if event is InputEventMouseMotion:
-		rotate_y(-event.relative.x * mouse_sensitivity)
-		if camera:
-			camera.rotate_x(-event.relative.y * mouse_sensitivity)
-			camera.rotation.x = clamp(camera.rotation.x, -deg_to_rad(80), deg_to_rad(80))
+		if event.button_mask & MOUSE_BUTTON_MASK_RIGHT:
+			# Pan the world (move camera opposite to mouse motion)
+			var forward = -global_transform.basis.z
+			var right = global_transform.basis.x
+			var move_amount = (right * -event.relative.x + forward * event.relative.y) * mouse_sensitivity * (_zoom_level * 0.5)
+			global_translate(move_amount)
+			
+		elif event.button_mask & MOUSE_BUTTON_MASK_MIDDLE:
+			# Rotate camera
+			rotate_y(-event.relative.x * rotation_sensitivity)
+			camera.rotate_x(-event.relative.y * rotation_sensitivity)
+			camera.rotation.x = clamp(camera.rotation.x, -deg_to_rad(85), -deg_to_rad(5))
+			_update_camera_position()
 
-	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_SPACE:
-		if is_on_floor():
-			velocity.y = jump_velocity
-
-	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_Q:
-		_pending_explosion = true
-
-	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_E:
-		_start_suck()
-
-	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_T:
-		_pending_tower = true
+	# Actions (set flags for _physics_process)
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_Q:
+			_pending_explosion = true
+		elif event.keycode == KEY_E:
+			_start_suck() # This just sets timer, safe to call here
+		elif event.keycode == KEY_T:
+			_pending_tower = true
+		elif event.keycode == KEY_ESCAPE:
+			cancel_placement()
 
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
-		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-		else:
+		if Input.mouse_mode == Input.MOUSE_MODE_VISIBLE:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+		else:
+			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+func _update_camera_position() -> void:
+	camera.position = Vector3.ZERO + (camera.transform.basis.z * _zoom_level)
 
 func _physics_process(delta: float) -> void:
-	if _is_locked:
-		return
-
-	if _birdeye:
-		velocity = Vector3.ZERO
-		return
-
-	if not is_on_floor():
-		velocity.y -= GRAVITY * delta
-
-	var input_dir = Vector2.ZERO
-	if Input.is_physical_key_pressed(KEY_W): input_dir.y -= 1
-	if Input.is_physical_key_pressed(KEY_S): input_dir.y += 1
-	if Input.is_physical_key_pressed(KEY_A): input_dir.x -= 1
-	if Input.is_physical_key_pressed(KEY_D): input_dir.x += 1
-
-	input_dir = input_dir.normalized()
-
-	if input_dir != Vector2.ZERO:
-		var move_dir = (global_transform.basis * Vector3(input_dir.x, 0, input_dir.y)).normalized()
-		velocity.x = move_dir.x * speed
-		velocity.z = move_dir.z * speed
-	else:
-		velocity.x = move_toward(velocity.x, 0, speed)
-		velocity.z = move_toward(velocity.z, 0, speed)
-
-	move_and_slide()
-
 	if _pending_explosion:
 		_pending_explosion = false
-		_explode_at_crosshair()
-
+		_explode_at_mouse()
+		
 	if _pending_tower:
 		_pending_tower = false
-		_spawn_tower_at_crosshair()
+		start_placement("res://scripts/towers/tower.gd")
+
+	if _ghost_tower:
+		_update_ghost_position()
 
 	if _suck_timer > 0.0:
 		_suck_timer -= delta
@@ -135,7 +121,71 @@ func _physics_process(delta: float) -> void:
 		if _suck_timer <= 0.0:
 			_stop_suck()
 
-func _explode_at_crosshair() -> void:
+func start_placement(script_path: String) -> void:
+	cancel_placement()
+	_placement_script = script_path
+	
+	_ghost_tower = StaticBody3D.new()
+	_ghost_tower.collision_layer = 0
+	_ghost_tower.collision_mask = 0
+	
+	_ghost_tower.set_script(load(script_path))
+	get_parent().add_child(_ghost_tower)
+	_apply_ghost_material(_ghost_tower)
+
+func cancel_placement() -> void:
+	if _ghost_tower:
+		_ghost_tower.queue_free()
+		_ghost_tower = null
+	_placement_script = ""
+
+func _update_ghost_position() -> void:
+	var hit_point = _get_raycast_hit_point()
+	if hit_point != Vector3.INF:
+		_ghost_tower.global_position = hit_point + Vector3(0.0, -2.0, 0.0)
+		var valid = true
+		if terrain and terrain.get_path_distance(hit_point.x, hit_point.z) < 8.0:
+			valid = false
+		_update_ghost_color(valid)
+
+func _update_ghost_color(valid: bool) -> void:
+	var color = Color(0, 1, 0, 0.4) if valid else Color(1, 0, 0, 0.4)
+	_apply_custom_color(_ghost_tower, color)
+
+func _apply_ghost_material(node: Node) -> void:
+	for child in node.get_children():
+		if child is MeshInstance3D:
+			var mat = StandardMaterial3D.new()
+			mat.transparency = StandardMaterial3D.TRANSPARENCY_ALPHA
+			mat.albedo_color = Color(1, 1, 1, 0.4)
+			child.material_override = mat
+		_apply_ghost_material(child)
+
+func _apply_custom_color(node: Node, color: Color) -> void:
+	for child in node.get_children():
+		if child is MeshInstance3D:
+			if child.material_override is StandardMaterial3D:
+				child.material_override.albedo_color = color
+		_apply_custom_color(child, color)
+
+func _confirm_placement() -> void:
+	var hit_point = _get_raycast_hit_point()
+	if hit_point == Vector3.INF:
+		return
+	if terrain and terrain.get_path_distance(hit_point.x, hit_point.z) < 8.0:
+		return
+
+	var tower = StaticBody3D.new()
+	tower.position = hit_point + Vector3(0.0, -2.0, 0.0)
+	tower.set_script(load(_placement_script))
+	
+	get_parent().add_child(tower)
+	if terrain:
+		terrain.deflect_obstacle(hit_point.x, hit_point.z, 2.5, 8.0)
+	
+	cancel_placement()
+
+func _explode_at_mouse() -> void:
 	var hit_point = _get_raycast_hit_point()
 	if hit_point == Vector3.INF:
 		return
@@ -154,45 +204,24 @@ func _explode_at_crosshair() -> void:
 			dir = Vector3.UP
 		body.apply_central_impulse(dir * explosion_force * falloff)
 
-func _spawn_tower_at_crosshair() -> void:
-	var hit_point = _get_raycast_hit_point()
-	if hit_point == Vector3.INF:
-		return
-	if terrain and terrain.get_path_distance(hit_point.x, hit_point.z) < 8.0:
-		return
-
-	var tower = StaticBody3D.new()
-	# Sink it slightly so the base blends into the ground, like in world.gd
-	tower.position = hit_point + Vector3(0.0, -2.0, 0.0)
-	tower.set_script(load("res://scripts/towers/tower.gd"))
-	
-	get_parent().add_child(tower)
-	if terrain:
-		terrain.deflect_obstacle(hit_point.x, hit_point.z, 2.5, 8.0)
-	print("Tower spawned at: ", hit_point)
-
 func _spawn_explosion(_pos: Vector3) -> void:
 	var explosion = EXPLOSION_PREFAB.instantiate()
 	get_parent().add_child(explosion)
 	explosion.global_position = _pos
-	
-	# Clean up the explosion after it finishes (longest particle lifetime is 7s)
 	get_tree().create_timer(10.0).timeout.connect(explosion.queue_free)
 
 func _start_suck() -> void:
-	_stop_suck() # Clear any existing suck
+	_stop_suck()
 	_suck_timer = 3.0
-	
 	_active_suck_area = Area3D.new()
-	_active_suck_area.collision_mask = 2 # Only detect enemies
+	_active_suck_area.collision_mask = 2  # only detect enemies
 	var col = CollisionShape3D.new()
 	var sphere = SphereShape3D.new()
 	sphere.radius = explosion_radius
 	col.shape = sphere
 	_active_suck_area.add_child(col)
 	get_parent().add_child(_active_suck_area)
-	
-	print("[DEBUG] Started 3s suck effect.")
+	print("[SUCK] started, area added to scene, radius=", explosion_radius)
 
 func _stop_suck() -> void:
 	if _active_suck_area:
@@ -200,80 +229,68 @@ func _stop_suck() -> void:
 		_active_suck_area = null
 	_suck_timer = 0.0
 
+var _suck_log_cooldown := 0.0  ## throttle debug prints to once per 0.5s
+
 func _process_suck() -> void:
 	if not _active_suck_area:
+		print("[SUCK] ERROR: _active_suck_area is null during suck")
 		return
-		
+
 	var hit_point = _get_raycast_hit_point()
-	if hit_point == Vector3.INF:
-		# If raycast fails, keep area at last position or move far away?
-		# Let's keep it at the last valid position to be less jarring.
-		pass
-	else:
+	if hit_point != Vector3.INF:
 		_active_suck_area.global_position = hit_point
 
-	# In continuous mode, we just query overlapping bodies.
-	# We don't need to await here because the area is persistent.
 	var bodies = _active_suck_area.get_overlapping_bodies()
 	var suck_point = _active_suck_area.global_position
-	
+
+	_suck_log_cooldown -= get_physics_process_delta_time()
+	if _suck_log_cooldown <= 0.0:
+		_suck_log_cooldown = 0.5
+		print("[SUCK] pos=", suck_point, " raycast_ok=", hit_point != Vector3.INF, " bodies=", bodies.size())
+		if bodies.size() > 0:
+			for b in bodies:
+				print("  -> ", b.name, " layer=", b.collision_layer, " is_rigid=", b is RigidBody3D)
+
 	for body in bodies:
 		if not body is RigidBody3D:
 			continue
 		var diff = body.global_position - suck_point
 		var dist = diff.length()
 		var falloff = 1.0 - clamp(dist / explosion_radius, 0.0, 1.0)
-		var dir = -diff.normalized() # Pull towards
-		
+		var dir = -diff.normalized()  # pull toward suck point
 		if dir.is_zero_approx():
 			dir = Vector3.UP
-		
-		# Since this runs every frame, we use a smaller force (divided by 60 approx)
-		# or just use a dedicated suck force variable.
-		# Let's scale by delta for consistent behavior.
-		body.apply_central_impulse(dir * explosion_force * falloff * 0.1)
+		# Directly modify velocity instead of apply_central_impulse — the deferred impulse
+		# gets overwritten when the enemy sets linear_velocity = corrected in its pathing.
+		body.linear_velocity += dir * explosion_force * falloff * 0.2
 
 func _get_raycast_hit_point() -> Vector3:
 	if not camera:
 		return Vector3.INF
+	
+	var mouse_pos = get_viewport().get_mouse_position()
+	var ray_length = 1000.0
+	var from = camera.project_ray_origin(mouse_pos)
+	var to = from + camera.project_ray_normal(mouse_pos) * ray_length
+	
 	var space_state = get_world_3d().direct_space_state
-	var from = camera.global_position
-	var to = from + (-camera.global_transform.basis.z) * 200.0
+	if not space_state:
+		return Vector3.INF
+		
 	var ray_query = PhysicsRayQueryParameters3D.create(from, to)
-	ray_query.collision_mask = 1 # Only hit the ground
-	ray_query.exclude = [get_rid()]
+	ray_query.collision_mask = 1
+	if _ghost_tower:
+		ray_query.exclude = [_ghost_tower.get_rid()]
+		
 	var ray_result = space_state.intersect_ray(ray_query)
+	
 	if not ray_result:
 		return Vector3.INF
 	return ray_result.position
 
-func _toggle_birdeye() -> void:
-	if _birdeye_tween and _birdeye_tween.is_running():
-		return
-
-	_birdeye = not _birdeye
-
-	if _birdeye_tween:
-		_birdeye_tween.kill()
-
-	_birdeye_tween = create_tween().set_ease(Tween.EASE_IN_OUT).set_trans(Tween.TRANS_CUBIC)
-	_birdeye_tween.set_parallel(true)
-
-	if _birdeye:
-		_stop_suck()
-		_pending_explosion = false
-		_saved_cam_pos = camera.position
-		_saved_cam_rot = camera.rotation
-		_birdeye_tween.tween_property(camera, "position", Vector3(0, BIRDEYE_HEIGHT, 0), BIRDEYE_ZOOM_DURATION)
-		_birdeye_tween.tween_property(camera, "rotation", Vector3(-PI / 2.0, 0, 0), BIRDEYE_ZOOM_DURATION)
-	else:
-		_birdeye_tween.tween_property(camera, "position", _saved_cam_pos, BIRDEYE_ZOOM_DURATION)
-		_birdeye_tween.tween_property(camera, "rotation", _saved_cam_rot, BIRDEYE_ZOOM_DURATION)
-
-
 func _get_bodies_in_sphere(center: Vector3, radius: float) -> Array[Node3D]:
 	var area = Area3D.new()
-	area.collision_mask = 2 # Only detect enemies
+	area.collision_mask = 2
 	var col = CollisionShape3D.new()
 	var sphere = SphereShape3D.new()
 	sphere.radius = radius
