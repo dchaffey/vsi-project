@@ -20,17 +20,11 @@ func _ready() -> void:
 	collision_layer = 0
 	collision_mask = 2
 
-	# Mesh
-	var mesh_instance := MeshInstance3D.new()
-	var box_mesh := BoxMesh.new()
-	box_mesh.size = Vector3(size, size, size)
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.1, 0.4, 1.0)
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_color.a = 0.6
-	box_mesh.material = mat
-	mesh_instance.mesh = box_mesh
-	add_child(mesh_instance)
+	# House model — visual representation of the defence objective
+	var house_scene := load("res://assets/House.glb") as PackedScene
+	assert(house_scene != null, "Failed to load res://assets/House.glb")
+	var house_instance := house_scene.instantiate()
+	add_child(house_instance)
 
 	# Collision shape
 	var collision_shape := CollisionShape3D.new()
