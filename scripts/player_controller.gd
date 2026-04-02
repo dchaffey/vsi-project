@@ -25,6 +25,8 @@ var _active_suck_area: Area3D = null  ## persistent sphere for suck detection
 var _pending_explosion := false
 var _pending_tower := false
 var _pending_confirm_placement := false  # deferred to _physics_process to access space state
+var _pending_rotate_ghost := false  # deferred rotation of ghost tower during placement
+var _ghost_rotation_step: float = deg_to_rad(45.0)  # snap rotation increment
 
 var _placement_script: String = ""
 var _ghost_tower: Node3D = null
@@ -93,6 +95,8 @@ func _input(event: InputEvent) -> void:
 			_start_suck() # This just sets timer, safe to call here
 		elif event.keycode == KEY_T:
 			_pending_tower = true
+		elif event.keycode == KEY_R and _ghost_tower:
+			_pending_rotate_ghost = true
 		elif event.keycode == KEY_ESCAPE:
 			cancel_placement()
 
@@ -117,6 +121,10 @@ func _physics_process(delta: float) -> void:
 	if _pending_confirm_placement:
 		_pending_confirm_placement = false
 		_confirm_placement()
+
+	if _pending_rotate_ghost:
+		_pending_rotate_ghost = false
+		_rotate_ghost_tower()
 
 	if _ghost_tower:
 		_update_ghost_position()
@@ -146,6 +154,10 @@ func cancel_placement() -> void:
 		_ghost_tower.queue_free()
 		_ghost_tower = null
 	_placement_script = ""
+
+func _rotate_ghost_tower() -> void:
+	if _ghost_tower:
+		_ghost_tower.rotation.y += _ghost_rotation_step
 
 func _update_ghost_position() -> void:
 	var hit_point = _get_raycast_hit_point()
@@ -185,6 +197,7 @@ func _confirm_placement() -> void:
 
 	var tower = StaticBody3D.new()
 	tower.position = hit_point
+	tower.rotation.y = _ghost_tower.rotation.y
 	tower.set_script(load(_placement_script))
 	
 	get_parent().add_child(tower)

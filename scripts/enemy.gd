@@ -31,6 +31,8 @@ var _settle_timer: float = 0.0
 var _dead_timer: float = 0.0
 var _prev_velocity := Vector3.ZERO
 var _material: StandardMaterial3D
+var _pending_impulse := Vector3.ZERO  # tracks impulses applied this frame for ragdoll threshold check
+var _impulse_ragdoll_threshold: float = 20.0  # minimum impulse magnitude to trigger ragdoll
 
 const _COLOR_FULL_HP := Color(0.85, 0.85, 0.85)
 const _COLOR_LOW_HP := Color(1.0, 0.4, 0.0)
@@ -53,6 +55,11 @@ func _ready() -> void:
 	defence_objective.enemy_entered.connect(_on_defence_objective_entered)
 
 
+func receive_impact_impulse(direction: Vector3, magnitude: float) -> void:
+	# accumulate impulse for this frame — checked in _process_pathing() to decide ragdoll transition
+	_pending_impulse += direction.normalized() * magnitude
+
+
 func _physics_process(delta: float) -> void:
 	assert(terrain != null)
 
@@ -68,6 +75,7 @@ func _physics_process(delta: float) -> void:
 		State.DEAD:
 			_process_dead(delta)
 			_prev_velocity = linear_velocity
+			_pending_impulse = Vector3.ZERO
 			return
 
 	# --- Impact damage detection ---
@@ -80,16 +88,30 @@ func _physics_process(delta: float) -> void:
 		else:
 			_update_color()
 	_prev_velocity = linear_velocity
+	_pending_impulse = Vector3.ZERO  # clear impulse for next frame
 
 func _process_pathing(delta: float, pos: Vector3) -> void:
-	# --- Transition to RAGDOLL on strong impulse ---
+	# --- Check pending impulse and transition to RAGDOLL if strong enough ---
+	var impulse_len := _pending_impulse.length()
+	if impulse_len > 0.0:
+		# Apply impulse to velocity — weak hits just push the enemy around
+		linear_velocity += _pending_impulse
+		# Strong impulse triggers ragdoll
+		if impulse_len >= _impulse_ragdoll_threshold:
+			# print("[ENEMY] ", name, " → RAGDOLL from impulse=", snapped(impulse_len, 0.1))
+			_state = State.RAGDOLL
+			_settle_timer = 0.0
+			_unlock_angular_axes()
+			return
+
+	# --- Transition to RAGDOLL on strong velocity (re-hit during ragdoll recovery) ---
 	# Must check BEFORE velocity correction so external impulses (suck, explosion)
 	# are not overwritten by the lerp before the threshold is evaluated.
 	var _vel_len := linear_velocity.length()
-	if _vel_len > move_speed * 1.5:
-		print("[ENEMY] ", name, " vel=", snapped(_vel_len, 0.1), " threshold=", move_speed * 2.0)
+	# if _vel_len > move_speed * 1.5:
+		# print("[ENEMY] ", name, " vel=", snapped(_vel_len, 0.1), " threshold=", move_speed * 2.0)
 	if _vel_len > move_speed * 2.0:
-		print("[ENEMY] ", name, " → RAGDOLL at vel=", snapped(_vel_len, 0.1))
+		# print("[ENEMY] ", name, " → RAGDOLL at vel=", snapped(_vel_len, 0.1))
 		_state = State.RAGDOLL
 		_settle_timer = 0.0
 		_unlock_angular_axes()
@@ -129,7 +151,7 @@ func _process_pathing(delta: float, pos: Vector3) -> void:
 	if horiz_speed < move_speed * 0.2:
 		_stuck_timer += delta
 		if _stuck_timer > 0.5 and _jump_cooldown <= 0.0:
-			linear_velocity.y = 12.0
+			linear_velocity.y = 20.0
 			_stuck_timer = 0.0
 			_jump_cooldown = 1.0
 	else:
@@ -231,4 +253,3 @@ func _respawn_at_start() -> void:
 	_jump_cooldown = 0.0
 	_lock_angular_axes()
 	quaternion = Quaternion.IDENTITY
-

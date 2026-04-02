@@ -48,7 +48,7 @@ func _spawn_projectile(target: Node3D) -> void:
 	
 	# Add to scene tree first, then call setup
 	get_parent().add_child(projectile)
-	projectile.setup(start_pos, target, 15.0) # Arcing height
+	projectile.setup(start_pos, target)
 
 func _get_enemies_in_range(center: Vector3, radius: float) -> Array:
 	var area = Area3D.new()

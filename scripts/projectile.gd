@@ -6,13 +6,13 @@ var control1: Vector3
 var control2_offset: Vector3
 var duration: float = 1.2
 var elapsed_time: float = 0.0
-var impact_force: float = 50.0
+var impact_force: float = 10.0  # impact velocity applied to enemies on hit
 
 # Path visualization
 var path_visualizer: MeshInstance3D
 var path_material: StandardMaterial3D
 
-func setup(p_start: Vector3, p_target: Node3D, _p_height: float) -> void:
+func setup(p_start: Vector3, p_target: Node3D) -> void:
 	start_pos = p_start
 	target_node = p_target
 	
@@ -115,5 +115,7 @@ func _on_body_entered(body: Node3D) -> void:
 		if body is RigidBody3D:
 			var impact_dir = (body.global_position - global_position).normalized()
 			if impact_dir.is_zero_approx(): impact_dir = Vector3.UP
-			body.apply_central_impulse((impact_dir + Vector3.UP * 0.4).normalized() * impact_force)
+			# Apply impulse with upward component — enemy decides whether to ragdoll based on magnitude
+			var impulse_dir = (impact_dir + Vector3.UP * 0.4).normalized()
+			body.receive_impact_impulse(impulse_dir, impact_force)
 		queue_free()
