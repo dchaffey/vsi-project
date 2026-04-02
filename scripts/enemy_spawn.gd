@@ -7,9 +7,16 @@ var terrain: StaticBody3D        ## terrain node — used for height queries whe
 var defence_objective: Area3D    ## navigation target passed to spawned enemies
 var player: CharacterBody3D      ## player ref used to award money on enemy death
 
+var _rng := RandomNumberGenerator.new() ## per-spawn RNG for position jitter
+var _enemy_index: int = 0               ## running counter for unique enemy names
+
 
 func _ready() -> void:
-	# Mesh — red semi-transparent cube
+	_build_marker_mesh()
+
+
+## Builds the red semi-transparent cube that marks this spawn point.
+func _build_marker_mesh() -> void:
 	var mesh_instance := MeshInstance3D.new()
 	var box_mesh := BoxMesh.new()
 	box_mesh.size = Vector3(size, size, size)
@@ -22,21 +29,19 @@ func _ready() -> void:
 	add_child(mesh_instance)
 
 
-## Create one enemy near this spawn point. index gives it a unique name.
-## rng is a shared RandomNumberGenerator for position jitter.
-## Returns the enemy node — caller is responsible for add_child.
-func spawn_enemy(index: int, rng: RandomNumberGenerator) -> RigidBody3D:
+## Create one enemy near this spawn point with position jitter. Called by wave manager.
+func create_enemy() -> RigidBody3D:
 	assert(terrain != null, "terrain must be set on EnemySpawn before spawning")
 	assert(defence_objective != null, "defence_objective must be set on EnemySpawn before spawning")
 
-	var x: float = position.x + rng.randf_range(-2.0, 2.0)  # jittered world X
-	var z: float = position.z + rng.randf_range(-2.0, 2.0)  # jittered world Z
-	var y: float = terrain.get_height_at(x, z) + 2.0         # just above terrain surface
+	var x: float = position.x + _rng.randf_range(-2.0, 2.0)  # jittered world X
+	var z: float = position.z + _rng.randf_range(-2.0, 2.0)  # jittered world Z
+	var y: float = terrain.get_height_at(x, z) + 2.0          # just above terrain surface
 
 	var enemy := RigidBody3D.new()
 	enemy.position = Vector3(x, y, z)
 	enemy.mass = 1.0
-	enemy.name = "Enemy_" + str(index)
+	enemy.name = "%s_Enemy_%d" % [name, _enemy_index]
 	enemy.collision_layer = 2        # Layer 2 — Enemies
 	enemy.collision_mask = 1 | 2 | 4 # Ground, Enemies, Player
 
@@ -52,6 +57,7 @@ func spawn_enemy(index: int, rng: RandomNumberGenerator) -> RigidBody3D:
 			player.money += m_hp / 100.0  # reward money proportional to max HP
 	)
 
+	_enemy_index += 1
 	return enemy
 
 

@@ -6,29 +6,15 @@ var shoot_timer: float = 0.0
 var projectiles_per_shot: int = 3
 
 func _ready() -> void:
-	# Cylinder base
-	var cylinder_mesh_instance = MeshInstance3D.new()
-	var cylinder_mesh = CylinderMesh.new()
-	cylinder_mesh.top_radius = 1.5
-	cylinder_mesh.bottom_radius = 1.5
-	cylinder_mesh.height = 9.0
-	cylinder_mesh_instance.mesh = cylinder_mesh
-	cylinder_mesh_instance.position = Vector3(0, 4.5, 0)
-	add_child(cylinder_mesh_instance)
-	
-	# Sphere top
-	var sphere_mesh_instance = MeshInstance3D.new()
-	var sphere_mesh = SphereMesh.new()
-	var sphere_radius : float = 1.8
-	sphere_mesh.radius = sphere_radius
-	sphere_mesh.height = 2.0 * sphere_radius
-	sphere_mesh_instance.mesh = sphere_mesh
-	sphere_mesh_instance.position = Vector3(0, 9.0, 0)
-	add_child(sphere_mesh_instance)
-	
-	# Collision (simplified as a cylinder or box)
-	var collision_shape = CollisionShape3D.new()
-	var shape = CylinderShape3D.new()
+	# Visual mesh from imported GLB asset
+	var tower_scene: PackedScene = load("res://assets/Tower.glb")
+	var tower_instance := tower_scene.instantiate()
+	tower_instance.position = Vector3(0, 4, 0)  # lift model above node origin
+	add_child(tower_instance)
+
+	# Collision shape approximating the tower geometry
+	var collision_shape := CollisionShape3D.new()
+	var shape := CylinderShape3D.new()
 	shape.height = 17 # cylinder + part of sphere
 	shape.radius = 1.6
 	collision_shape.shape = shape

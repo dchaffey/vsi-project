@@ -1,10 +1,6 @@
 [gd_scene format=3 uid="uid://du1k37m3ib5po"]
 
 [ext_resource type="Script" uid="uid://copus4xchdm6f" path="res://scripts/world.gd" id="1_tyffc"]
-[ext_resource type="PackedScene" uid="uid://xwt83vffqc5" path="res://assets/House.glb" id="2_ns6u7"]
 
 [node name="Node3D" type="Node3D" unique_id=1606255221]
 script = ExtResource("1_tyffc")
-
-[node name="House" parent="." unique_id=666499813 instance=ExtResource("2_ns6u7")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.57513094, 0, 1.08045)

@@ -2,6 +2,7 @@ extends CanvasLayer
 
 var hp_label: Label
 var money_label: Label
+var wave_label: Label
 var crosshair: ColorRect
 var tower_container: HBoxContainer
 var _player: CharacterBody3D
@@ -33,6 +34,14 @@ func _ready() -> void:
 	money_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	add_child(money_label)
 
+	# --- Wave Label ---
+	wave_label = Label.new()
+	wave_label.name = "WaveLabel"
+	wave_label.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	wave_label.position = Vector2(20, 60)
+	wave_label.add_theme_font_size_override("font_size", 32)
+	add_child(wave_label)
+
 	# --- Tower Selection UI ---
 	tower_container = HBoxContainer.new()
 	tower_container.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
@@ -45,6 +54,7 @@ func _ready() -> void:
 
 func _setup_tower_buttons() -> void:
 	var towers = [
+		{"name": "Basic", "script": "res://scripts/towers/basic_tower.gd", "cost": 30},
 		{"name": "Standard", "script": "res://scripts/towers/tower.gd", "cost": 50},
 		{"name": "Wind", "script": "res://scripts/towers/wind_tower.gd", "cost": 150}
 	]
@@ -123,6 +133,10 @@ func _update_hp(curr: float, max_hp: float) -> void:
 
 func _update_money(amount: float) -> void:
 	money_label.text = "Money: $%.2f" % amount
+
+## Update the wave display. current and total are 1-based.
+func update_wave(current: int, total: int) -> void:
+	wave_label.text = "Wave: %d / %d" % [current, total]
 
 func show_game_over() -> void:
 	layer = 100 # Ensure it's on top

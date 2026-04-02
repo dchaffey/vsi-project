@@ -24,6 +24,7 @@ var _suck_timer := 0.0
 var _active_suck_area: Area3D = null  ## persistent sphere for suck detection
 var _pending_explosion := false
 var _pending_tower := false
+var _pending_confirm_placement := false  # deferred to _physics_process to access space state
 
 var _placement_script: String = ""
 var _ghost_tower: Node3D = null
@@ -47,12 +48,13 @@ func _ready() -> void:
 	await get_tree().process_frame
 
 func _unhandled_input(event: InputEvent) -> void:
-	if _ghost_tower and event is InputEventMouseButton and event.pressed:
-		if event.button_index == MOUSE_BUTTON_LEFT:
-			_confirm_placement()
+	if _ghost_tower and event is InputEventMouseButton:
+		if event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+			# defer to _physics_process — direct_space_state inaccessible outside physics
+			_pending_confirm_placement = true
 			get_viewport().set_input_as_handled()
 			return
-		elif event.button_index == MOUSE_BUTTON_RIGHT:
+		elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 			cancel_placement()
 			get_viewport().set_input_as_handled()
 			return
@@ -112,6 +114,10 @@ func _physics_process(delta: float) -> void:
 		_pending_tower = false
 		start_placement("res://scripts/towers/tower.gd")
 
+	if _pending_confirm_placement:
+		_pending_confirm_placement = false
+		_confirm_placement()
+
 	if _ghost_tower:
 		_update_ghost_position()
 
@@ -131,6 +137,8 @@ func start_placement(script_path: String) -> void:
 	
 	_ghost_tower.set_script(load(script_path))
 	get_parent().add_child(_ghost_tower)
+	_ghost_tower.set_physics_process(false)  # prevent ghost from shooting
+	_ghost_tower.set_process(false)
 	_apply_ghost_material(_ghost_tower)
 
 func cancel_placement() -> void:
@@ -142,7 +150,7 @@ func cancel_placement() -> void:
 func _update_ghost_position() -> void:
 	var hit_point = _get_raycast_hit_point()
 	if hit_point != Vector3.INF:
-		_ghost_tower.global_position = hit_point + Vector3(0.0, -2.0, 0.0)
+		_ghost_tower.global_position = hit_point
 		var valid = true
 		if terrain and terrain.get_path_distance(hit_point.x, hit_point.z) < 8.0:
 			valid = false
@@ -176,7 +184,7 @@ func _confirm_placement() -> void:
 		return
 
 	var tower = StaticBody3D.new()
-	tower.position = hit_point + Vector3(0.0, -2.0, 0.0)
+	tower.position = hit_point
 	tower.set_script(load(_placement_script))
 	
 	get_parent().add_child(tower)

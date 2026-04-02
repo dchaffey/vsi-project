@@ -24,6 +24,7 @@ func _ready() -> void:
 	var house_scene := load("res://assets/House.glb") as PackedScene
 	assert(house_scene != null, "Failed to load res://assets/House.glb")
 	var house_instance := house_scene.instantiate()
+	house_instance.position = Vector3(0, -2, 0)  # lift model above node origin
 	add_child(house_instance)
 
 	# Collision shape

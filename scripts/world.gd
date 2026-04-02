@@ -6,6 +6,14 @@ var player: CharacterBody3D
 var hud: CanvasLayer
 var enemy_spawns: Array = []  # all EnemySpawn nodes — populated in spawn_objectives
 
+## Wave system state
+var _waves: Array = []             # parsed wave defs: [{enemy_count, spawn_rate}, ...]
+var _current_wave: int = 0         # index into _waves
+var _spawned_this_wave: int = 0    # enemies spawned so far in current wave
+var _spawn_robin: int = 0          # round-robin index across spawn points
+var _spawn_timer: Timer            # fires at wave's spawn rate
+var _wave_delay_timer: Timer       # 5-second pause between waves
+
 func _ready() -> void:
 	# Boost global gravity programmatically (optional but effective)
 	ProjectSettings.set_setting("physics/3d/default_gravity", 19.6)
@@ -13,14 +21,16 @@ func _ready() -> void:
 	spawn_environment()
 	spawn_sunlight()
 
-
 	# Must happen in this order
 	spawn_terrain()
 	spawn_objectives()
 	spawn_walls()
-	spawn_player()  # must precede spawn_enemies so player ref is valid for die rewards
-	spawn_enemies()
+	spawn_player()
+	_assign_player_to_spawns() # player ref needed for death rewards
 	spawn_hud()
+	_load_waves("res://assets/levels/lvl1.csv")
+	_init_wave_timers()
+	_start_wave(0)
 	# spawn_flow_debug()
 
 
@@ -112,24 +122,92 @@ func spawn_hud() -> void:
 	hud.initialize(player, defence_objective)
 	print("HUD spawned and initialized.")
 
+## Passes the player reference to every enemy spawn so death rewards work.
+func _assign_player_to_spawns() -> void:
+	for spawn_node in enemy_spawns:
+		spawn_node.player = player
+
+
+## Parse a tab-separated wave file into _waves array.
+func _load_waves(path: String) -> void:
+	var file := FileAccess.open(path, FileAccess.READ)
+	assert(file != null, "Failed to open wave file: " + path)
+	file.get_line() # skip header row
+	while not file.eof_reached():
+		var line := file.get_line().strip_edges()
+		if line.is_empty():
+			continue
+		var cols := line.split(",")
+		assert(cols.size() >= 3, "Wave line needs 3 columns: " + line)
+		_waves.append({
+			"enemy_count": int(cols[1]),
+			"spawn_rate": float(cols[2]),
+		})
+	file.close()
+	assert(_waves.size() > 0, "No waves found in " + path)
+	print("Loaded %d waves from %s" % [_waves.size(), path])
+
+
+## Create the two timers used by the wave system.
+func _init_wave_timers() -> void:
+	_spawn_timer = Timer.new()
+	_spawn_timer.one_shot = false
+	_spawn_timer.timeout.connect(_on_spawn_tick)
+	add_child(_spawn_timer)
+
+	_wave_delay_timer = Timer.new()
+	_wave_delay_timer.one_shot = true
+	_wave_delay_timer.wait_time = 10.0
+	_wave_delay_timer.timeout.connect(_on_wave_delay_done)
+	add_child(_wave_delay_timer)
+
+
+## Begin spawning enemies for the given wave index.
+func _start_wave(index: int) -> void:
+	assert(index < _waves.size(), "Wave index out of bounds")
+	_current_wave = index
+	_spawned_this_wave = 0
+	var wave = _waves[index]
+	_spawn_timer.wait_time = 1.0 / wave.spawn_rate # interval per enemy
+	_spawn_timer.start()
+	if hud:
+		hud.update_wave(index + 1, _waves.size())
+	print("Wave %d: %d enemies at %d/sec" % [index + 1, wave.enemy_count, wave.spawn_rate])
+
+
+## Spawn one enemy per tick, round-robin across spawn points.
+func _on_spawn_tick() -> void:
+	var wave = _waves[_current_wave]
+	var spawn_node = enemy_spawns[_spawn_robin % enemy_spawns.size()]
+	var enemy = spawn_node.create_enemy()
+	add_child(enemy)
+	_spawn_robin += 1
+	_spawned_this_wave += 1
+
+	if _spawned_this_wave >= wave.enemy_count:
+		_spawn_timer.stop()
+		if _current_wave + 1 < _waves.size():
+			_wave_delay_timer.start()
+			print("Wave %d complete. Next wave in 5 seconds." % [_current_wave + 1])
+		else:
+			print("All waves complete.")
+
+
+## Start the next wave after the inter-wave delay.
+func _on_wave_delay_done() -> void:
+	_start_wave(_current_wave + 1)
+
+
 func _on_game_over() -> void:
+	_spawn_timer.stop()
+	_wave_delay_timer.stop()
+
 	if player:
 		player._is_locked = true
-	
+
 	if hud:
 		hud.show_game_over()
 
-
-func spawn_enemies() -> void:
-	assert(enemy_spawns.size() > 0, "No enemy spawns — call spawn_objectives first.")
-
-	var rng := RandomNumberGenerator.new()
-	# Distribute 30 enemies round-robin across all spawn points
-	for i in range(30):
-		var spawn_node = enemy_spawns[i % enemy_spawns.size()]  # round-robin assignment
-		spawn_node.player = player  # player is guaranteed set before this call
-		var enemy: RigidBody3D = spawn_node.spawn_enemy(i, rng)
-		add_child(enemy)
 
 var _flow_debug_mi: MeshInstance3D
 var _flow_debug_mat: StandardMaterial3D
@@ -185,8 +263,9 @@ func _rebuild_flow_debug() -> void:
 	_flow_debug_mi.mesh = mesh
 
 func spawn_walls() -> void:
-	var wall_height = 30.0
+	var wall_height = 30.0 # Reduced to 30 units — game board aesthetic
 	var wall_thickness = 1.0
+	var base_height = 2.0 # Floor platform height
 
 	# Derive terrain half-extents from the terrain node
 	var half_w: float = (terrain.terrain_width - 1) * terrain.cell_size * 0.5
@@ -196,8 +275,31 @@ func spawn_walls() -> void:
 
 	var wall_material = StandardMaterial3D.new()
 	wall_material.albedo_color = Color(0.3, 0.3, 0.3) # Dark grey
-	wall_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	wall_material.albedo_color.a = 0.5 # Semi-transparent
+
+	# Create base floor platform — much larger for VR standing space
+	var base_platform = StaticBody3D.new()
+	base_platform.position = Vector3(0, -base_height / 2.0, 0) # Positioned so top sits at y=0
+	base_platform.collision_layer = 1
+
+	var vr_floor_size = 500.0 # Large area for VR player to stand on
+
+	var floor_mesh = MeshInstance3D.new()
+	var floor_box = BoxMesh.new()
+	floor_box.size = Vector3(vr_floor_size, base_height, vr_floor_size)
+	floor_mesh.mesh = floor_box
+
+	var floor_material = StandardMaterial3D.new()
+	floor_material.albedo_color = Color(0.3, 0.3, 0.3) # Dark grey
+	floor_mesh.material_override = floor_material
+	base_platform.add_child(floor_mesh)
+
+	var floor_collision = CollisionShape3D.new()
+	var floor_shape = BoxShape3D.new()
+	floor_shape.size = Vector3(vr_floor_size, base_height, vr_floor_size)
+	floor_collision.shape = floor_shape
+	base_platform.add_child(floor_collision)
+
+	add_child(base_platform)
 
 	# Wall data: [position, size]
 	var walls = [
@@ -232,4 +334,4 @@ func spawn_walls() -> void:
 
 		add_child(static_body)
 
-		print("Walls spawned around the terrain.")
+	print("Walls spawned around the terrain.")
