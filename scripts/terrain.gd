@@ -78,6 +78,20 @@ extends StaticBody3D
 		indicator_radius = v
 		_queue_rebuild()
 
+@export_group("Foliage")
+@export var foliage_density: float = 0.5:
+	set(v):
+		foliage_density = v
+		_queue_rebuild()
+@export var tree_scale_min: float = 0.8:
+	set(v):
+		tree_scale_min = v
+		_queue_rebuild()
+@export var tree_scale_max: float = 1.2:
+	set(v):
+		tree_scale_max = v
+		_queue_rebuild()
+
 signal flow_field_changed
 
 var height_map: Array = [] # 2D array [x][z] of floats
@@ -98,9 +112,12 @@ var _flow_field_built := false
 ## Walkability grid. False for cells blocked by placed obstacles.
 var _walkable: Array = []  # [x][z] of bool
 
+var foliage_types: Array[FoliageType] = []
+
 
 func _ready() -> void:
 	_is_ready = true
+	_setup_foliage_programmatically()
 	_rebuild()
 
 
@@ -159,8 +176,125 @@ func _rebuild() -> void:
 	# --- Place start / goal indicators ---
 	_spawn_indicators()
 
+	_spawn_foliage()
+
 	print("Terrain built (%dx%d, cell %.1f, max height %.1f)." % [terrain_width, terrain_depth, cell_size, max_height])
 
+
+# ---------------------------------------------------------------------------
+# Foliage Generation
+# ---------------------------------------------------------------------------
+
+func _extract_mesh_from_scene(scene: PackedScene) -> Mesh:
+	var state = scene.get_state()
+	for i in range(state.get_node_count()):
+		for j in range(state.get_node_property_count(i)):
+			var prop_name = state.get_node_property_name(i, j)
+			if prop_name == "mesh":
+				return state.get_node_property_value(i, j)
+	return null
+
+func _spawn_foliage() -> void:
+	# Clean up old foliage MultiMeshInstances
+	for child in get_children():
+		if child.is_in_group("_terrain_foliage"):
+			child.queue_free()
+
+	if foliage_types.size() == 0:
+		return
+
+	var rng = RandomNumberGenerator.new()
+	if noise_seed != 0:
+		rng.seed = noise_seed
+	elif Engine.is_editor_hint():
+		rng.seed = 12345
+	else:
+		rng.seed = randi()
+
+	# Prepare lists of transforms for each foliage type
+	var instances_per_type = []
+	for i in range(foliage_types.size()):
+		instances_per_type.append([])
+
+	var half_w: float = (terrain_width - 1) * cell_size * 0.5
+	var half_d: float = (terrain_depth - 1) * cell_size * 0.5
+
+	# Generate random positions
+	var total_cells = (terrain_width - 1) * (terrain_depth - 1)
+	var max_attempts = int(total_cells * foliage_density * 4.0)
+
+	# Margin in grid cells — keeps foliage inside the walls
+	var margin = 2.0
+	# Path exclusion radius in grid cells — keeps foliage off enemy walkways
+	var path_clearance: float = 1.5
+
+	for attempt in range(max_attempts):
+		var x = rng.randf_range(margin, float(terrain_width - 1) - margin)
+		var z = rng.randf_range(margin, float(terrain_depth - 1) - margin)
+
+		var wx = x * cell_size - half_w
+		var wz = z * cell_size - half_d
+
+		# Skip if on or near a road (blend) or enemy path (distance)
+		if get_road_blend_at(wx, wz) > 0.05:
+			continue
+		if get_path_distance(wx, wz) < path_clearance:
+			continue
+
+		var height = get_height_at(wx, wz)
+
+		# Probability based on elevation: more dense at bottom
+		var elevation_prob = 1.0 - (height / max_height)
+		elevation_prob = clampf(elevation_prob, 0.0, 1.0)
+		elevation_prob = pow(elevation_prob, 2.0) # Bias towards lower elevation
+
+		if rng.randf() > elevation_prob:
+			continue
+
+		# Choose foliage type via weighted random selection
+		var total_weight = 0.0
+		for ft in foliage_types:
+			total_weight += ft.spawn_weight
+		var roll = rng.randf() * total_weight
+		var chosen_type_idx = 0
+		var current_weight = 0.0
+		for i in range(foliage_types.size()):
+			current_weight += foliage_types[i].spawn_weight
+			if roll <= current_weight:
+				chosen_type_idx = i
+				break
+
+		# Build basis (rotation + scale) separately, then set origin
+		var scale = rng.randf_range(tree_scale_min, tree_scale_max)
+		var basis = Basis(Vector3.UP, rng.randf_range(0, TAU))
+		basis = basis.scaled(Vector3(scale, scale, scale))
+		var t = Transform3D(basis, Vector3(wx, height, wz))
+
+		instances_per_type[chosen_type_idx].append(t)
+
+	# Create MultiMeshInstances
+	for i in range(foliage_types.size()):
+		var type = foliage_types[i]
+		var transforms = instances_per_type[i]
+
+		if transforms.size() == 0 or type.mesh == null:
+			continue
+
+		var multimesh = MultiMesh.new()
+		multimesh.transform_format = MultiMesh.TRANSFORM_3D
+		multimesh.instance_count = transforms.size()
+		multimesh.mesh = type.mesh
+
+		for j in range(transforms.size()):
+			multimesh.set_instance_transform(j, transforms[j])
+
+		var mmi = MultiMeshInstance3D.new()
+		mmi.multimesh = multimesh
+		mmi.name = "Foliage_" + str(i)
+		mmi.add_to_group("_terrain_foliage")
+		add_child(mmi)
+		if Engine.is_editor_hint():
+			mmi.set_owner(get_tree().edited_scene_root)
 
 # ---------------------------------------------------------------------------
 # Start / goal indicators
@@ -948,8 +1082,7 @@ func _create_terrain_mesh(map: Array) -> ArrayMesh:
 
 
 ## Returns the interpolated terrain height at a world-space (wx, wz) position.
-## Performs bilinear interpolation between the four nearest grid vertices.
-## Returns 0.0 if the height map is empty or the position is out of bounds.
+## Performs triangle-aware interpolation matching the mesh triangles.
 func get_height_at(wx: float, wz: float) -> float:
 	if height_map.size() == 0:
 		return 0.0
@@ -967,26 +1100,91 @@ func get_height_at(wx: float, wz: float) -> float:
 
 	var x0 := mini(int(gx), terrain_width - 2)
 	var z0 := mini(int(gz), terrain_depth - 2)
+	
+	var fx: float = gx - float(x0)
+	var fz: float = gz - float(z0)
+
+	var h00: float = height_map[x0][z0]
+	var h10: float = height_map[x0 + 1][z0]
+	var h01: float = height_map[x0][z0 + 1]
+	var h11: float = height_map[x0 + 1][z0 + 1]
+
+	# Barycentric interpolation matching the triangle split in _create_terrain_mesh
+	# Triangle 1: (0,0), (1,0), (0,1) -> fx + fz < 1
+	# Triangle 2: (1,0), (1,1), (0,1) -> fx + fz >= 1
+	if fx + fz < 1.0:
+		return h00 + fx * (h10 - h00) + fz * (h01 - h00)
+	else:
+		return h11 + (1.0 - fx) * (h01 - h11) + (1.0 - fz) * (h10 - h11)
+
+
+## Returns the interpolated road blend factor at a world-space (wx, wz) position.
+func get_road_blend_at(wx: float, wz: float) -> float:
+	if _road_blend.size() == 0:
+		return 0.0
+
+	var half_w: float = (terrain_width - 1) * cell_size * 0.5
+	var half_d: float = (terrain_depth - 1) * cell_size * 0.5
+
+	var gx: float = (wx + half_w) / cell_size
+	var gz: float = (wz + half_d) / cell_size
+
+	gx = clampf(gx, 0.0, float(terrain_width - 1))
+	gz = clampf(gz, 0.0, float(terrain_depth - 1))
+
+	var x0 := mini(int(gx), terrain_width - 2)
+	var z0 := mini(int(gz), terrain_depth - 2)
 	var x1 := x0 + 1
 	var z1 := z0 + 1
 
 	var fx: float = gx - float(x0)
 	var fz: float = gz - float(z0)
 
-	# Bilinear interpolation
-	var h00: float = height_map[x0][z0]
-	var h10: float = height_map[x1][z0]
-	var h01: float = height_map[x0][z1]
-	var h11: float = height_map[x1][z1]
+	var b00: float = _road_blend[x0][z0]
+	var b10: float = _road_blend[x1][z0]
+	var b01: float = _road_blend[x0][z1]
+	var b11: float = _road_blend[x1][z1]
 
-	var h: float = h00 * (1.0 - fx) * (1.0 - fz) \
-				 + h10 * fx * (1.0 - fz) \
-				 + h01 * (1.0 - fx) * fz \
-				 + h11 * fx * fz
-	return h
+	# Bilinear interpolation is fine for road blend
+	return b00 * (1.0 - fx) * (1.0 - fz) \
+		 + b10 * fx * (1.0 - fz) \
+		 + b01 * (1.0 - fx) * fz \
+		 + b11 * fx * fz
 
 
 func _create_terrain_material() -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	mat.vertex_color_use_as_albedo = true
 	return mat
+
+## Define your models here (path to your .obj, .res, or .mesh files)
+var tree_paths = [
+	"res://assets/gltf/Pine_1.gltf",
+	"res://assets/gltf/Pine_2.gltf",
+	"res://assets/gltf/Pine_3.gltf",
+	"res://assets/gltf/Pine_4.gltf",
+	"res://assets/gltf/Pine_5.gltf"
+]
+
+func _setup_foliage_programmatically() -> void:
+	foliage_types.clear()
+	
+	for path in tree_paths:
+		# 1. Create a new instance of your custom resource
+		var new_type = FoliageType.new()
+		
+		# 2. Load the mesh from your project folder
+		var loaded_mesh = load(path)
+		
+		if loaded_mesh is Mesh:
+			new_type.mesh = loaded_mesh
+		elif loaded_mesh is PackedScene:
+			# If you pointed to a .glb/.tscn, we need to extract the mesh
+			new_type.mesh = _extract_mesh_from_scene(loaded_mesh)
+		
+		new_type.spawn_weight = 1.0 # Or set logic based on name
+		
+		# 3. Add it to the array
+		foliage_types.append(new_type)
+	
+	_queue_rebuild()

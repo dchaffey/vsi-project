@@ -21,6 +21,9 @@ func _ready() -> void:
 	collision_shape.position = Vector3(0, 8.5, 0)
 	add_child(collision_shape)
 
+static func get_cost() -> int:
+	return 30  # purchase cost
+
 func _physics_process(delta: float) -> void:
 	shoot_timer += delta
 	if shoot_timer >= shoot_interval:

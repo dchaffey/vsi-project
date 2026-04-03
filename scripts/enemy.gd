@@ -18,7 +18,7 @@ var height_correction_strength: float = 25.0
 ## HP and impact damage.
 var hp: float = 100.0
 var max_hp: float = 100.0
-var impact_damage_threshold: float = 15.0
+var impact_damage_threshold: float = 30.0
 var impact_damage_scale: float = 2.0
 
 ## Cached start positions (world space).
@@ -209,7 +209,7 @@ func _enter_dead() -> void:
 
 func _process_dead(delta: float) -> void:
 	_dead_timer += delta
-	if _dead_timer >= 3.0:
+	if _dead_timer >= 1.0:
 		_respawn_at_start()
 
 

@@ -53,12 +53,30 @@ func _ready() -> void:
 	_setup_tower_buttons()
 
 func _setup_tower_buttons() -> void:
-	var towers = [
-		{"name": "Basic", "script": "res://scripts/towers/basic_tower.gd", "cost": 30},
-		{"name": "Standard", "script": "res://scripts/towers/tower.gd", "cost": 50},
-		{"name": "Wind", "script": "res://scripts/towers/wind_tower.gd", "cost": 150}
-	]
-	
+	var dir = DirAccess.open("res://scripts/towers/")
+	assert(dir != null, "Failed to open towers directory")
+
+	var towers = []
+	dir.list_dir_begin()
+	var file_name = dir.get_next()
+
+	while file_name != "":
+		if file_name.ends_with(".gd"):  # only load GDScript files
+			var script_path = "res://scripts/towers/" + file_name
+			var script_class = load(script_path)
+			var tower_name = file_name.trim_suffix(".gd").capitalize()
+
+			towers.append({
+				"name": tower_name,
+				"script": script_path,
+				"cost": script_class.get_cost()
+			})
+
+		file_name = dir.get_next()
+
+	# Sort by cost (ascending)
+	towers.sort_custom(func(a, b): return a.cost < b.cost)
+
 	for tower_info in towers:
 		_create_tower_button(tower_info)
 
@@ -114,8 +132,8 @@ func _create_tower_button(info: Dictionary) -> void:
 	# Click to select
 	panel.gui_input.connect(func(event):
 		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-			if _player and _player.has_method("start_placement"):
-				_player.start_placement(info.script)
+			if _player and _player.money >= info.cost:
+				_player.start_placement(info.script, info.cost)
 	)
 
 func initialize(player: CharacterBody3D, objective: Area3D) -> void:

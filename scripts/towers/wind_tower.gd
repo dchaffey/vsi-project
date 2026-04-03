@@ -11,6 +11,9 @@ var _detection_area: Area3D  # persistent area for enemy detection
 
 const MODEL = preload("res://assets/mühle.glb")
 
+static func get_cost() -> int:
+	return 80  # purchase cost
+
 func _ready() -> void:
 	_model_visual = MODEL.instantiate()
 	add_child(_model_visual)

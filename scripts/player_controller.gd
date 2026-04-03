@@ -23,12 +23,12 @@ var _max_zoom: float = 300.0
 var _suck_timer := 0.0
 var _active_suck_area: Area3D = null  ## persistent sphere for suck detection
 var _pending_explosion := false
-var _pending_tower := false
 var _pending_confirm_placement := false  # deferred to _physics_process to access space state
 var _pending_rotate_ghost := false  # deferred rotation of ghost tower during placement
 var _ghost_rotation_step: float = deg_to_rad(45.0)  # snap rotation increment
 
 var _placement_script: String = ""
+var _placement_cost: int = 0  # cost of tower being placed
 var _ghost_tower: Node3D = null
 
 const EXPLOSION_PREFAB = preload("res://addons/ExplosionExport/Prefab.tscn")
@@ -93,8 +93,6 @@ func _input(event: InputEvent) -> void:
 			_pending_explosion = true
 		elif event.keycode == KEY_E:
 			_start_suck() # This just sets timer, safe to call here
-		elif event.keycode == KEY_T:
-			_pending_tower = true
 		elif event.keycode == KEY_R and _ghost_tower:
 			_pending_rotate_ghost = true
 		elif event.keycode == KEY_ESCAPE:
@@ -114,9 +112,6 @@ func _physics_process(delta: float) -> void:
 		_pending_explosion = false
 		_explode_at_mouse()
 		
-	if _pending_tower:
-		_pending_tower = false
-		start_placement("res://scripts/towers/tower.gd")
 
 	if _pending_confirm_placement:
 		_pending_confirm_placement = false
@@ -135,9 +130,10 @@ func _physics_process(delta: float) -> void:
 		if _suck_timer <= 0.0:
 			_stop_suck()
 
-func start_placement(script_path: String) -> void:
+func start_placement(script_path: String, cost: int = 0) -> void:
 	cancel_placement()
 	_placement_script = script_path
+	_placement_cost = cost
 	
 	_ghost_tower = StaticBody3D.new()
 	_ghost_tower.collision_layer = 0
@@ -154,6 +150,7 @@ func cancel_placement() -> void:
 		_ghost_tower.queue_free()
 		_ghost_tower = null
 	_placement_script = ""
+	_placement_cost = 0
 
 func _rotate_ghost_tower() -> void:
 	if _ghost_tower:
@@ -199,11 +196,14 @@ func _confirm_placement() -> void:
 	tower.position = hit_point
 	tower.rotation.y = _ghost_tower.rotation.y
 	tower.set_script(load(_placement_script))
-	
+
 	get_parent().add_child(tower)
 	if terrain:
 		terrain.deflect_obstacle(hit_point.x, hit_point.z, 2.5, 8.0)
-	
+
+	# Subtract cost from money
+	money -= _placement_cost
+
 	cancel_placement()
 
 func _explode_at_mouse() -> void:
