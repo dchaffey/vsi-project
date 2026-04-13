@@ -113,6 +113,7 @@ var _flow_field_built := false
 var _walkable: Array = []  # [x][z] of bool
 
 var foliage_types: Array[FoliageType] = []
+var _foliage_prob_ranges: Array = []  # Array of [start, end] ranges for each foliage type
 
 
 func _ready() -> void:
@@ -195,9 +196,10 @@ func _extract_mesh_from_scene(scene: PackedScene) -> Mesh:
 	return null
 
 func _spawn_foliage() -> void:
-	# Clean up old foliage MultiMeshInstances
+	# Clean up all MultiMeshInstance3D children — catches both runtime-created
+	# nodes (in _terrain_foliage group) and stale baked nodes from the scene file.
 	for child in get_children():
-		if child.is_in_group("_terrain_foliage"):
+		if child is MultiMeshInstance3D:
 			child.queue_free()
 
 	if foliage_types.size() == 0:
@@ -219,9 +221,20 @@ func _spawn_foliage() -> void:
 	var half_w: float = (terrain_width - 1) * cell_size * 0.5
 	var half_d: float = (terrain_depth - 1) * cell_size * 0.5
 
+	# Compute actual min/max heights from the height map for proper normalization
+	var actual_min_h := INF
+	var actual_max_h := -INF
+	for row in height_map:
+		for h in row:
+			if h < actual_min_h:
+				actual_min_h = h
+			if h > actual_max_h:
+				actual_max_h = h
+	var actual_range := actual_max_h - actual_min_h
+
 	# Generate random positions
 	var total_cells = (terrain_width - 1) * (terrain_depth - 1)
-	var max_attempts = int(total_cells * foliage_density * 4.0)
+	var max_attempts = int(total_cells * foliage_density * 0.4)
 
 	# Margin in grid cells — keeps foliage inside the walls
 	var margin = 2.0
@@ -243,32 +256,29 @@ func _spawn_foliage() -> void:
 
 		var height = get_height_at(wx, wz)
 
-		# Probability based on elevation: more dense at bottom
-		var elevation_prob = 1.0 - (height / max_height)
+		# Bell curve centered at 1/4 max height: peak density at foothills, sparse at peaks
+		var normalized_height = (height - actual_min_h) / actual_range
+		var distance_from_peak = abs(normalized_height - 0.25)
+		var elevation_prob = pow(1.0 - distance_from_peak, 4.0)
 		elevation_prob = clampf(elevation_prob, 0.0, 1.0)
-		elevation_prob = pow(elevation_prob, 2.0) # Bias towards lower elevation
 
 		if rng.randf() > elevation_prob:
 			continue
 
-		# Choose foliage type via weighted random selection
-		var total_weight = 0.0
-		for ft in foliage_types:
-			total_weight += ft.spawn_weight
-		var roll = rng.randf() * total_weight
+		# Choose foliage type by checking which probability range the roll falls into
+		var roll = rng.randf()
 		var chosen_type_idx = 0
-		var current_weight = 0.0
-		for i in range(foliage_types.size()):
-			current_weight += foliage_types[i].spawn_weight
-			if roll <= current_weight:
+		for i in range(_foliage_prob_ranges.size()):
+			var range_pair = _foliage_prob_ranges[i]
+			if roll >= range_pair[0] and roll < range_pair[1]:
 				chosen_type_idx = i
 				break
 
 		# Build basis (rotation + scale) separately, then set origin
-		var scale = rng.randf_range(tree_scale_min, tree_scale_max)
-		var basis = Basis(Vector3.UP, rng.randf_range(0, TAU))
-		basis = basis.scaled(Vector3(scale, scale, scale))
-		var t = Transform3D(basis, Vector3(wx, height, wz))
+		var tree_scale = rng.randf_range(tree_scale_min, tree_scale_max)
+		var rotation_basis = Basis(Vector3.UP, rng.randf_range(0, TAU))
+		rotation_basis = rotation_basis.scaled(Vector3(tree_scale, tree_scale, tree_scale))
+		var t = Transform3D(rotation_basis, Vector3(wx, height, wz))
 
 		instances_per_type[chosen_type_idx].append(t)
 
@@ -389,12 +399,17 @@ func generate_height_map() -> Array:
 		noise.seed = randi()
 
 	var map: Array = []
+	var half_w := (terrain_width - 1) / 2.0
+	var half_d := (terrain_depth - 1) / 2.0
+
 	for x in range(terrain_width):
 		var row: Array = []
 		for z in range(terrain_depth):
 			# FastNoiseLite returns values in [-1, 1]; remap to [0, max_height]
 			var n: float = noise.get_noise_2d(float(x), float(z))
-			row.append(pow(((n + 1.0) * 0.5 * max_height), 1.5))
+			var h: float = pow(((n + 1.0) * 0.5 * max_height), 1.5)
+			
+			row.append(h)
 		map.append(row)
 	return map
 
@@ -612,8 +627,8 @@ func _smooth_path_heights(map: Array, path: Array) -> PackedFloat64Array:
 	for _pass in range(3):
 		var prev := smoothed.duplicate()
 		for i in range(smoothed.size()):
-			var lo : int = maxi(0, i - window / 2.0)
-			var hi := mini(smoothed.size() - 1, i + window / 2.0)
+			var lo : int = maxi(0, int(i - window / 2.0))
+			var hi := mini(smoothed.size() - 1, int(i + window / 2.0))
 			var sum := 0.0
 			for j in range(lo, hi + 1):
 				sum += prev[j]
@@ -1155,36 +1170,60 @@ func get_road_blend_at(wx: float, wz: float) -> float:
 func _create_terrain_material() -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
 	mat.vertex_color_use_as_albedo = true
+	# mat.shading_mode = BaseMaterial3D.SHADING_MODE_FLAT
 	return mat
 
-## Define your models here (path to your .obj, .res, or .mesh files)
-var tree_paths = [
-	"res://assets/gltf/Pine_1.gltf",
-	"res://assets/gltf/Pine_2.gltf",
-	"res://assets/gltf/Pine_3.gltf",
-	"res://assets/gltf/Pine_4.gltf",
-	"res://assets/gltf/Pine_5.gltf"
-]
+## Define your models and their spawn weights here
+## Higher weight = more common spawning
+var tree_paths = {
+	"res://assets/gltf/Pine_1.gltf": 0.5,
+	"res://assets/gltf/Pine_2.gltf": 0.5,
+	"res://assets/gltf/Pine_3.gltf": 0.5,
+	"res://assets/gltf/Pine_4.gltf": 0.5,
+	"res://assets/gltf/Pine_5.gltf": 0.5,
+	"res://assets/gltf/TwistedTree_1.gltf": 0.005,
+	"res://assets/gltf/TwistedTree_2.gltf": 0.005,
+	"res://assets/gltf/TwistedTree_3.gltf": 0.005,
+	"res://assets/gltf/TwistedTree_4.gltf": 0.005,
+	"res://assets/gltf/Rock_Medium_1.gltf": 0.1,
+	"res://assets/gltf/Rock_Medium_2.gltf": 0.1,
+	"res://assets/gltf/Rock_Medium_3.gltf": 0.1,
+}
 
 func _setup_foliage_programmatically() -> void:
 	foliage_types.clear()
-	
-	for path in tree_paths:
+	_foliage_prob_ranges.clear()
+
+	# Calculate sum of all weights for normalization
+	var total_weight = 0.0
+	for weight in tree_paths.values():
+		total_weight += weight
+
+	var cumulative = 0.0
+	for path in tree_paths.keys():
 		# 1. Create a new instance of your custom resource
 		var new_type = FoliageType.new()
-		
+
 		# 2. Load the mesh from your project folder
 		var loaded_mesh = load(path)
-		
+
 		if loaded_mesh is Mesh:
 			new_type.mesh = loaded_mesh
 		elif loaded_mesh is PackedScene:
 			# If you pointed to a .glb/.tscn, we need to extract the mesh
 			new_type.mesh = _extract_mesh_from_scene(loaded_mesh)
-		
-		new_type.spawn_weight = 1.0 # Or set logic based on name
-		
-		# 3. Add it to the array
+
+		# 3. Normalize weight to sum of all probabilities
+		new_type.spawn_weight = tree_paths[path] / total_weight
+
+		# 4. Store probability range [start, end]
+		var range_end = cumulative + new_type.spawn_weight
+		_foliage_prob_ranges.append([cumulative, range_end])
+		cumulative = range_end
+
+		# 5. Add it to the array
 		foliage_types.append(new_type)
-	
+		if new_type.mesh == null:
+			print("WARNING: Failed to load mesh from " + path)
+
 	_queue_rebuild()

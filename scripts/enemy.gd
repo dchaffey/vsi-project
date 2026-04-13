@@ -16,7 +16,7 @@ var move_speed: float = 10.0
 var height_correction_strength: float = 25.0
 
 ## HP and impact damage.
-var hp: float = 100.0
+var hp: float = 30.0
 var max_hp: float = 100.0
 var impact_damage_threshold: float = 30.0
 var impact_damage_scale: float = 2.0
@@ -26,6 +26,7 @@ var _start_positions: Array = []
 ## RNG for picking a random start on respawn.
 var _rng := RandomNumberGenerator.new()
 
+var should_respawn: bool = false  # if false, queue_free() on death instead of respawning
 var _state: State = State.PATHING
 var _settle_timer: float = 0.0
 var _dead_timer: float = 0.0
@@ -33,6 +34,7 @@ var _prev_velocity := Vector3.ZERO
 var _material: StandardMaterial3D
 var _pending_impulse := Vector3.ZERO  # tracks impulses applied this frame for ragdoll threshold check
 var _impulse_ragdoll_threshold: float = 20.0  # minimum impulse magnitude to trigger ragdoll
+var _flash_timer: float = 0.0  # seconds remaining in damage flash — overrides health color when > 0
 
 const _COLOR_FULL_HP := Color(0.85, 0.85, 0.85)
 const _COLOR_LOW_HP := Color(1.0, 0.4, 0.0)
@@ -58,6 +60,17 @@ func _ready() -> void:
 func receive_impact_impulse(direction: Vector3, magnitude: float) -> void:
 	# accumulate impulse for this frame — checked in _process_pathing() to decide ragdoll transition
 	_pending_impulse += direction.normalized() * magnitude
+
+
+func apply_dmg(amount: float) -> void:
+	# direct damage from collisions, explosions, etc.
+	if _state == State.DEAD:
+		return
+	hp -= amount
+	if hp <= 0.0:
+		_enter_dead()
+	else:
+		_flash_red()
 
 
 func _physics_process(delta: float) -> void:
@@ -86,6 +99,12 @@ func _physics_process(delta: float) -> void:
 		if hp <= 0.0:
 			_enter_dead()
 		else:
+			_flash_red()
+
+	# --- Decay damage flash ---
+	if _flash_timer > 0.0:
+		_flash_timer -= get_physics_process_delta_time()
+		if _flash_timer <= 0.0:
 			_update_color()
 	_prev_velocity = linear_velocity
 	_pending_impulse = Vector3.ZERO  # clear impulse for next frame
@@ -210,7 +229,17 @@ func _enter_dead() -> void:
 func _process_dead(delta: float) -> void:
 	_dead_timer += delta
 	if _dead_timer >= 1.0:
-		_respawn_at_start()
+		if should_respawn:
+			_respawn_at_start()
+		else:
+			queue_free()
+
+
+func _flash_red() -> void:
+	# Briefly tint red to signal damage — _update_color restores health color when timer expires.
+	_flash_timer = 0.12
+	if _material:
+		_material.albedo_color = Color(1.0, 0.0, 0.0)
 
 
 func _update_color() -> void:
@@ -219,8 +248,12 @@ func _update_color() -> void:
 		_material.albedo_color = _COLOR_FULL_HP.lerp(_COLOR_LOW_HP, t)
 
 func _on_defence_objective_entered(body: Node3D) -> void:
-	if body == self:
+	if body != self or _state == State.DEAD:
+		return
+	if should_respawn:
 		_respawn_at_start()
+	else:
+		_enter_dead()  # counts as a kill for wave tracking
 
 
 ## Teleport the enemy back to a random road start position.
@@ -242,6 +275,7 @@ func _respawn_at_start() -> void:
 	linear_velocity = Vector3.ZERO
 	angular_velocity = Vector3.ZERO
 	hp = max_hp
+	_flash_timer = 0.0
 	_prev_velocity = Vector3.ZERO
 	_update_color()
 	_state = State.PATHING

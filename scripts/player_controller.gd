@@ -5,20 +5,23 @@ var zoom_speed: float = 1.1 # Multiplier
 var rotation_sensitivity: float = 0.005
 
 signal money_changed(new_amount: float)
-var money: float = 0.0:
+var money: float = 100.0:
 	set(val):
 		money = val
 		money_changed.emit(money)
 
 var explosion_force: float = 60.0
 var explosion_radius: float = 20.0
+var tower_path_clearance: float = 2.0  # minimum distance from paths for tower placement
 
 var terrain: StaticBody3D = null
 var camera: Camera3D
+var game_board: Node3D = null  # set by world.gd — used to dismiss building selection ring
 
 var _zoom_level: float = 80.0
 var _min_zoom: float = 10.0
 var _max_zoom: float = 300.0
+var _is_locked: bool = false  # locks input when game over
 
 var _suck_timer := 0.0
 var _active_suck_area: Area3D = null  ## persistent sphere for suck detection
@@ -30,6 +33,7 @@ var _ghost_rotation_step: float = deg_to_rad(45.0)  # snap rotation increment
 var _placement_script: String = ""
 var _placement_cost: int = 0  # cost of tower being placed
 var _ghost_tower: Node3D = null
+var _ghost_rotation: Vector3 = Vector3.ZERO  # preserve ghost rotation for placement
 
 const EXPLOSION_PREFAB = preload("res://addons/ExplosionExport/Prefab.tscn")
 
@@ -50,6 +54,8 @@ func _ready() -> void:
 	await get_tree().process_frame
 
 func _unhandled_input(event: InputEvent) -> void:
+	if _is_locked:
+		return
 	if _ghost_tower and event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
 			# defer to _physics_process — direct_space_state inaccessible outside physics
@@ -61,7 +67,14 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 
+	# Left-click on empty space — dismiss any open building ring
+	if not _ghost_tower and event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+		if game_board:
+			game_board.hide_building_ring()
+
 func _input(event: InputEvent) -> void:
+	if _is_locked:
+		return
 	# Zoom
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
@@ -108,6 +121,8 @@ func _update_camera_position() -> void:
 	camera.position = Vector3.ZERO + (camera.transform.basis.z * _zoom_level)
 
 func _physics_process(delta: float) -> void:
+	if _is_locked:
+		return
 	if _pending_explosion:
 		_pending_explosion = false
 		_explode_at_mouse()
@@ -130,15 +145,19 @@ func _physics_process(delta: float) -> void:
 		if _suck_timer <= 0.0:
 			_stop_suck()
 
-func start_placement(script_path: String, cost: int = 0) -> void:
+func start_placement(script_path: String) -> void:
 	cancel_placement()
 	_placement_script = script_path
-	_placement_cost = cost
-	
+	_ghost_rotation = Vector3.ZERO
+
+	# Get cost from building class (static method)
+	var building_class = load(script_path) as Script
+	_placement_cost = building_class.get_cost()
+
 	_ghost_tower = StaticBody3D.new()
 	_ghost_tower.collision_layer = 0
 	_ghost_tower.collision_mask = 0
-	
+
 	_ghost_tower.set_script(load(script_path))
 	get_parent().add_child(_ghost_tower)
 	_ghost_tower.set_physics_process(false)  # prevent ghost from shooting
@@ -155,13 +174,14 @@ func cancel_placement() -> void:
 func _rotate_ghost_tower() -> void:
 	if _ghost_tower:
 		_ghost_tower.rotation.y += _ghost_rotation_step
+		_ghost_rotation.y = _ghost_tower.rotation.y
 
 func _update_ghost_position() -> void:
 	var hit_point = _get_raycast_hit_point()
 	if hit_point != Vector3.INF:
 		_ghost_tower.global_position = hit_point
 		var valid = true
-		if terrain and terrain.get_path_distance(hit_point.x, hit_point.z) < 8.0:
+		if terrain and terrain.get_path_distance(hit_point.x, hit_point.z) < tower_path_clearance:
 			valid = false
 		_update_ghost_color(valid)
 
@@ -189,15 +209,14 @@ func _confirm_placement() -> void:
 	var hit_point = _get_raycast_hit_point()
 	if hit_point == Vector3.INF:
 		return
-	if terrain and terrain.get_path_distance(hit_point.x, hit_point.z) < 8.0:
+	if terrain and terrain.get_path_distance(hit_point.x, hit_point.z) < tower_path_clearance:
 		return
 
-	var tower = StaticBody3D.new()
-	tower.position = hit_point
-	tower.rotation.y = _ghost_tower.rotation.y
-	tower.set_script(load(_placement_script))
-
+	# Create building instance, add to scene tree first, then call place()
+	var building_script = load(_placement_script) as Script
+	var tower = building_script.new()
 	get_parent().add_child(tower)
+	tower.place(hit_point, Vector3(0, _ghost_rotation.y, 0))
 	if terrain:
 		terrain.deflect_obstacle(hit_point.x, hit_point.z, 2.5, 8.0)
 

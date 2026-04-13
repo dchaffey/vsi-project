@@ -3,18 +3,31 @@ extends Node3D
 var terrain: StaticBody3D
 var defence_objective: Area3D
 var player: CharacterBody3D
-var hud: CanvasLayer
-var enemy_spawns: Array = []  # all EnemySpawn nodes — populated in spawn_objectives
+var game_board: Node3D
+var enemy_spawn: Node3D       # single spawn point for all waves
+var is_vr_enabled := false
+var is_passthrough := true    # enable MR passthrough when VR headset is detected
+var _start_xr: Node = null    # reference to StartXR node for runtime passthrough toggle
 
 ## Wave system state
-var _waves: Array = []             # parsed wave defs: [{enemy_count, spawn_rate}, ...]
-var _current_wave: int = 0         # index into _waves
-var _spawned_this_wave: int = 0    # enemies spawned so far in current wave
-var _spawn_robin: int = 0          # round-robin index across spawn points
-var _spawn_timer: Timer            # fires at wave's spawn rate
-var _wave_delay_timer: Timer       # 5-second pause between waves
+var _waves: Array = []         # parsed wave defs: [{enemy_count, spawn_rate}, ...]
+var _current_wave: int = 0     # index into _waves
+var _alive_enemies: int = 0    # enemies still alive this wave — hits 0 → queue next wave
+var _spawned_this_wave: int = 0  # how many have been spawned so far this wave
+var _spawn_timer: Timer        # fires at wave's spawn rate
+var _wave_delay_timer: Timer   # cooldown before next wave starts
+var wave_delay: float = 8.0    # seconds between waves
 
 func _ready() -> void:
+	var xr_interface = XRServer.find_interface("OpenXR")
+	if xr_interface and xr_interface.is_initialized():
+		is_vr_enabled = true
+		var start_xr_scene := preload("res://addons/godot-xr-tools/xr/start_xr.tscn")
+		_start_xr = start_xr_scene.instantiate()
+		_start_xr.enable_passthrough = is_passthrough
+		add_child(_start_xr)  # StartXR._ready() sets viewport.use_xr and transparent_bg
+		is_passthrough = _start_xr.enable_passthrough  # reflects actual hardware capability
+
 	# Boost global gravity programmatically (optional but effective)
 	ProjectSettings.set_setting("physics/3d/default_gravity", 19.6)
 	
@@ -27,7 +40,7 @@ func _ready() -> void:
 	spawn_walls()
 	spawn_player()
 	_assign_player_to_spawns() # player ref needed for death rewards
-	spawn_hud()
+	await spawn_game_board()
 	_load_waves("res://assets/levels/lvl1.csv")
 	_init_wave_timers()
 	_start_wave(0)
@@ -56,33 +69,36 @@ func spawn_objectives() -> void:
 	add_child(defence_objective)
 	print("Defence objective spawned at goal.")
 
-	# Enemy spawn markers — each node owns per-spawn enemy creation
-	var enemy_spawn_script = load("res://scripts/enemy_spawn.gd")
-	for i in range(terrain.road_starts.size()):
-		var start: Vector2i = terrain.road_starts[i]
-		assert(terrain._in_bounds(start))
-		var pos_enemy_spawn: Vector3 = terrain._grid_to_world(start, half_w, half_d)
-		var spawn_y: float = terrain.get_height_at(pos_enemy_spawn.x, pos_enemy_spawn.z)
-		var enemy_spawn := Node3D.new()
-		enemy_spawn.name = "EnemySpawn_%d" % i
-		enemy_spawn.position = Vector3(pos_enemy_spawn.x, spawn_y + 2.0, pos_enemy_spawn.z)
-		enemy_spawn.set_script(enemy_spawn_script)
-		add_child(enemy_spawn)
-		enemy_spawn.terrain = terrain
-		enemy_spawn.defence_objective = defence_objective
-		enemy_spawns.append(enemy_spawn)
-	print("Enemy spawns placed.")
+	var start: Vector2i = terrain.road_starts[0]
+	assert(terrain._in_bounds(start))
+	var pos_enemy_spawn: Vector3 = terrain._grid_to_world(start, half_w, half_d)
+	var spawn_y: float = terrain.get_height_at(pos_enemy_spawn.x, pos_enemy_spawn.z)
+	enemy_spawn = Node3D.new()
+	enemy_spawn.name = "EnemySpawn"
+	enemy_spawn.position = Vector3(pos_enemy_spawn.x, spawn_y + 2.0, pos_enemy_spawn.z)
+	enemy_spawn.set_script(load("res://scripts/enemy_spawn.gd"))
+	add_child(enemy_spawn)
+	enemy_spawn.terrain = terrain
+	enemy_spawn.defence_objective = defence_objective
+	print("Enemy spawn placed.")
 
 func spawn_environment() -> void:
 	var world_env = WorldEnvironment.new()
 	var env = Environment.new()
-	
-	# Add a sky
-	var sky = Sky.new()
-	sky.sky_material = ProceduralSkyMaterial.new()
-	env.sky = sky
-	env.background_mode = Environment.BG_SKY
-	
+
+	if is_vr_enabled and is_passthrough:
+		# Transparent background lets the camera passthrough feed show
+		env.background_mode = Environment.BG_COLOR
+		env.background_color = Color(0, 0, 0, 0)
+		env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+		env.ambient_light_color = Color(0.6, 0.6, 0.6)  # compensate for missing sky ambient
+		env.ambient_light_energy = 0.5
+	else:
+		var sky = Sky.new()
+		sky.sky_material = ProceduralSkyMaterial.new()
+		env.sky = sky
+		env.background_mode = Environment.BG_SKY
+
 	world_env.environment = env
 	add_child(world_env)
 	print("Environment spawned.")
@@ -109,23 +125,26 @@ func spawn_player() -> void:
 	player.collision_mask = 1 | 2 # Detect Ground and Enemies
 	
 	# Only attach script; Player builds itself in _ready()
-	player.set_script(load("res://scripts/player_controller.gd"))
+	if is_vr_enabled:
+		player.set_script(load("res://scripts/vr_player.gd"))
+	else:
+		player.set_script(load("res://scripts/player_controller.gd"))
 	
 	add_child(player)
+	player.add_to_group("player")  # allows other nodes to locate the player via group lookup
 	player.terrain = terrain
 	print("Player spawned with first-person camera.")
 
-func spawn_hud() -> void:
-	hud = CanvasLayer.new()
-	hud.set_script(load("res://scripts/hud.gd"))
-	add_child(hud)
-	hud.initialize(player, defence_objective)
-	print("HUD spawned and initialized.")
+func spawn_game_board() -> void:
+	game_board = Node3D.new()
+	game_board.set_script(load("res://scripts/game_board.gd"))
+	add_child(game_board)
+	await game_board.initialize(player, defence_objective, terrain)
+	player.game_board = game_board
+	print("GameBoard spawned and initialized.")
 
-## Passes the player reference to every enemy spawn so death rewards work.
 func _assign_player_to_spawns() -> void:
-	for spawn_node in enemy_spawns:
-		spawn_node.player = player
+	enemy_spawn.player = player  # player ref needed for death rewards
 
 
 ## Parse a tab-separated wave file into _waves array.
@@ -157,7 +176,7 @@ func _init_wave_timers() -> void:
 
 	_wave_delay_timer = Timer.new()
 	_wave_delay_timer.one_shot = true
-	_wave_delay_timer.wait_time = 10.0
+	_wave_delay_timer.wait_time = wave_delay
 	_wave_delay_timer.timeout.connect(_on_wave_delay_done)
 	add_child(_wave_delay_timer)
 
@@ -167,28 +186,35 @@ func _start_wave(index: int) -> void:
 	assert(index < _waves.size(), "Wave index out of bounds")
 	_current_wave = index
 	_spawned_this_wave = 0
+	_alive_enemies = _waves[index].enemy_count  # pre-set to full wave count; decremented on each death
 	var wave = _waves[index]
-	_spawn_timer.wait_time = 1.0 / wave.spawn_rate # interval per enemy
+	_spawn_timer.wait_time = 1.0 / wave.spawn_rate
 	_spawn_timer.start()
-	if hud:
-		hud.update_wave(index + 1, _waves.size())
-	print("Wave %d: %d enemies at %d/sec" % [index + 1, wave.enemy_count, wave.spawn_rate])
+	if game_board:
+		game_board.update_wave(index + 1, _waves.size())
+	print("Wave %d: %d enemies at %.1f/sec" % [index + 1, wave.enemy_count, wave.spawn_rate])
 
 
-## Spawn one enemy per tick, round-robin across spawn points.
+## Spawn one enemy per tick until the wave count is exhausted.
 func _on_spawn_tick() -> void:
-	var wave = _waves[_current_wave]
-	var spawn_node = enemy_spawns[_spawn_robin % enemy_spawns.size()]
-	var enemy = spawn_node.create_enemy()
+	var enemy: RigidBody3D = enemy_spawn.create_enemy()
 	add_child(enemy)
-	_spawn_robin += 1
+	enemy.died.connect(func(_m: float) -> void: _on_enemy_died())
 	_spawned_this_wave += 1
-
-	if _spawned_this_wave >= wave.enemy_count:
+	if _spawned_this_wave >= _waves[_current_wave].enemy_count:
 		_spawn_timer.stop()
+
+
+## Called when any wave enemy dies. Starts next wave when all are gone.
+func _on_enemy_died() -> void:
+	assert(_alive_enemies > 0, "alive_enemies went negative — died signal fired too many times")
+	_alive_enemies -= 1
+	if _alive_enemies == 0:
 		if _current_wave + 1 < _waves.size():
 			_wave_delay_timer.start()
-			print("Wave %d complete. Next wave in 5 seconds." % [_current_wave + 1])
+			if game_board:
+				game_board.start_wave_countdown(_current_wave + 2, _waves.size(), wave_delay)
+			print("Wave %d cleared. Next wave in %.0f seconds." % [_current_wave + 1, wave_delay])
 		else:
 			print("All waves complete.")
 
@@ -205,8 +231,8 @@ func _on_game_over() -> void:
 	if player:
 		player._is_locked = true
 
-	if hud:
-		hud.show_game_over()
+	if game_board:
+		game_board.show_game_over()
 
 
 var _flow_debug_mi: MeshInstance3D
@@ -263,7 +289,7 @@ func _rebuild_flow_debug() -> void:
 	_flow_debug_mi.mesh = mesh
 
 func spawn_walls() -> void:
-	var wall_height = 30.0 # Reduced to 30 units — game board aesthetic
+	var wall_height = terrain.max_height + 30.0 # Walls extend from terrain max height upward
 	var wall_thickness = 1.0
 	var base_height = 2.0 # Floor platform height
 
@@ -283,15 +309,16 @@ func spawn_walls() -> void:
 
 	var vr_floor_size = 500.0 # Large area for VR player to stand on
 
-	var floor_mesh = MeshInstance3D.new()
-	var floor_box = BoxMesh.new()
-	floor_box.size = Vector3(vr_floor_size, base_height, vr_floor_size)
-	floor_mesh.mesh = floor_box
-
-	var floor_material = StandardMaterial3D.new()
-	floor_material.albedo_color = Color(0.3, 0.3, 0.3) # Dark grey
-	floor_mesh.material_override = floor_material
-	base_platform.add_child(floor_mesh)
+	# Skip floor mesh in passthrough mode — real-world floor is visible
+	if not (is_vr_enabled and is_passthrough):
+		var floor_mesh = MeshInstance3D.new()
+		var floor_box = BoxMesh.new()
+		floor_box.size = Vector3(vr_floor_size, base_height, vr_floor_size)
+		floor_mesh.mesh = floor_box
+		var floor_material = StandardMaterial3D.new()
+		floor_material.albedo_color = Color(0.3, 0.3, 0.3)
+		floor_mesh.material_override = floor_material
+		base_platform.add_child(floor_mesh)
 
 	var floor_collision = CollisionShape3D.new()
 	var floor_shape = BoxShape3D.new()
@@ -301,12 +328,13 @@ func spawn_walls() -> void:
 
 	add_child(base_platform)
 
-	# Wall data: [position, size]
+	# Wall data: [position, size] — walls extend from ground (y=0) upward
+	var wall_base_y = wall_height / 2.0
 	var walls = [
-		[Vector3(0, wall_height / 2, -half_d), Vector3(terrain_w, wall_height, wall_thickness)], # North
-		[Vector3(0, wall_height / 2, half_d), Vector3(terrain_w, wall_height, wall_thickness)],  # South
-		[Vector3(-half_w, wall_height / 2, 0), Vector3(wall_thickness, wall_height, terrain_d)], # West
-		[Vector3(half_w, wall_height / 2, 0), Vector3(wall_thickness, wall_height, terrain_d)],  # East
+		[Vector3(0, wall_base_y, -half_d), Vector3(terrain_w, wall_height, wall_thickness)], # North
+		[Vector3(0, wall_base_y, half_d), Vector3(terrain_w, wall_height, wall_thickness)],  # South
+		[Vector3(-half_w, wall_base_y, 0), Vector3(wall_thickness, wall_height, terrain_d)], # West
+		[Vector3(half_w, wall_base_y, 0), Vector3(wall_thickness, wall_height, terrain_d)],  # East
 	]
 
 	for wall_data in walls:
