@@ -30,8 +30,6 @@ var left_hand: XRController3D
 var laser_pointer: Node3D
 var _world_raycast: RayCast3D
 
-var l_id: int = -1
-var r_id: int = -1
 
 const EXPLOSION_PREFAB = preload("res://addons/ExplosionExport/Prefab.tscn")
 
@@ -50,6 +48,10 @@ func _ready() -> void:
 	right_hand = XRController3D.new()
 	right_hand.tracker = "right_hand"
 	xr_origin.add_child(right_hand)
+
+	# Wire XR controller button signals — replaces joypad polling
+	left_hand.button_pressed.connect(_on_left_button_pressed)
+	right_hand.button_pressed.connect(_on_right_button_pressed)
 
 	# Instantiate laser pointer for UI interactions
 	var pointer_scene = preload("res://addons/godot-xr-tools/functions/function_pointer.tscn")
@@ -73,48 +75,45 @@ func _physics_process(delta: float) -> void:
 	if _is_locked:
 		return
 
-	# Update Joypad IDs
-	l_id = left_hand.get_joy_id()
-	r_id = right_hand.get_joy_id()
-
 	if _ghost_tower:
-		# --- PLACEMENT MODE ---
-		if l_id != -1:
-			if Input.is_action_just_pressed("trigger_click", l_id):
-				_rotate_ghost_tower()
-
-		if r_id != -1:
-			if Input.is_action_just_pressed("trigger_click", r_id):
-				_confirm_placement()
-			
-			if Input.is_action_just_pressed("ax_button", r_id) or Input.is_action_just_pressed("by_button", r_id):
-				cancel_placement()
-
-		# Update ghost position
+		# Update ghost position each frame
 		if is_instance_valid(_world_raycast) and _world_raycast.is_colliding():
 			_world_raycast.add_exception_rid(_ghost_tower.get_rid())
 		_update_ghost_position()
-	
 	else:
-		# --- MAGIC / SELECTION MODE ---
-		if l_id != -1:
-			if Input.is_action_just_pressed("ax_button", l_id):
-				_explode_at_mouse()
-			
-			if Input.is_action_just_pressed("by_button", l_id):
-				_start_suck()
-
-		if r_id != -1:
-			if Input.is_action_just_pressed("trigger_click", r_id):
-				if game_board:
-					game_board.hide_building_ring()
-
 		# Process active magic (Suck)
 		if _suck_timer > 0.0:
 			_suck_timer -= delta
 			_process_suck()
 			if _suck_timer <= 0.0:
 				_stop_suck()
+
+# Left controller button handler — ax_button=explosion, by_button=suck, trigger=rotate ghost
+func _on_left_button_pressed(button_name: String) -> void:
+	if _is_locked:
+		return
+	if _ghost_tower:
+		if button_name == "trigger_click":
+			_rotate_ghost_tower()
+	else:
+		if button_name == "ax_button":
+			_explode_at_mouse()
+		if button_name == "by_button":
+			_start_suck()
+
+# Right controller button handler — trigger=confirm/dismiss, ax/by=cancel placement
+func _on_right_button_pressed(button_name: String) -> void:
+	if _is_locked:
+		return
+	if _ghost_tower:
+		if button_name == "trigger_click":
+			_confirm_placement()
+		if button_name == "ax_button" or button_name == "by_button":
+			cancel_placement()
+	else:
+		if button_name == "trigger_click":
+			if game_board:
+				game_board.hide_building_ring()
 
 func start_placement(script_path: String) -> void:
 	cancel_placement()
