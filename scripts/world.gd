@@ -20,13 +20,31 @@ var wave_delay: float = 8.0    # seconds between waves
 
 func _ready() -> void:
 	var xr_interface = XRServer.find_interface("OpenXR")
-	if xr_interface and xr_interface.is_initialized():
-		is_vr_enabled = true
+	if xr_interface:
+		print("OpenXR interface found. Attempting to initialize VR...")
 		var start_xr_scene := preload("res://addons/godot-xr-tools/xr/start_xr.tscn")
 		_start_xr = start_xr_scene.instantiate()
 		_start_xr.enable_passthrough = is_passthrough
-		add_child(_start_xr)  # StartXR._ready() sets viewport.use_xr and transparent_bg
-		is_passthrough = _start_xr.enable_passthrough  # reflects actual hardware capability
+		add_child(_start_xr)  # This triggers StartXR._ready() which calls initialize()
+		
+		# Give StartXR a frame to complete its internal initialization
+		await get_tree().process_frame
+		
+		if xr_interface.is_initialized():
+			is_vr_enabled = true
+			is_passthrough = _start_xr.enable_passthrough
+			
+			# Docs recommendation: Disable VSync to prevent frame capping by desktop monitor
+			DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+			
+			# Docs recommendation: Match physics ticks to HMD refresh rate (Quest 3 default is ~90Hz)
+			Engine.physics_ticks_per_second = 90
+			
+			print("OpenXR initialized successfully. VR mode active (90Hz Physics, VSync Disabled).")
+		else:
+			print("OpenXR failed to initialize. Falling back to desktop mode.")
+	else:
+		print("OpenXR interface not found. Desktop mode active.")
 
 	# Boost global gravity programmatically (optional but effective)
 	ProjectSettings.set_setting("physics/3d/default_gravity", 19.6)
