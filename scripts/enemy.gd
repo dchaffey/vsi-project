@@ -65,6 +65,7 @@ func receive_impact_impulse(direction: Vector3, magnitude: float) -> void:
 func apply_dmg(amount: float) -> void:
 	# direct damage from collisions, explosions, etc.
 	if _state == State.DEAD:
+		_flash_red()
 		return
 	hp -= amount
 	if hp <= 0.0:
@@ -78,6 +79,12 @@ func _physics_process(delta: float) -> void:
 
 	var pos := global_position
 
+	# --- Out of bounds detection ---
+	if pos.y < -30.0:
+		_enter_dead()
+		queue_free()
+		return
+
 	match _state:
 		State.PATHING:
 			_process_pathing(delta, pos)
@@ -87,19 +94,19 @@ func _physics_process(delta: float) -> void:
 			_process_recovering(delta)
 		State.DEAD:
 			_process_dead(delta)
-			_prev_velocity = linear_velocity
-			_pending_impulse = Vector3.ZERO
-			return
 
 	# --- Impact damage detection ---
 	var velocity_delta := (linear_velocity - _prev_velocity).length()
 	if velocity_delta > impact_damage_threshold:
 		var damage := (velocity_delta - impact_damage_threshold) * impact_damage_scale
-		hp -= damage
-		if hp <= 0.0:
-			_enter_dead()
-		else:
+		if _state == State.DEAD:
 			_flash_red()
+		else:
+			hp -= damage
+			if hp <= 0.0:
+				_enter_dead()
+			else:
+				_flash_red()
 
 	# --- Decay damage flash ---
 	if _flash_timer > 0.0:
@@ -218,6 +225,8 @@ func _unlock_angular_axes() -> void:
 
 
 func _enter_dead() -> void:
+	if _state == State.DEAD:
+		return
 	hp = 0.0
 	_dead_timer = 0.0
 	_state = State.DEAD

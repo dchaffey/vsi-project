@@ -18,6 +18,15 @@ const MODEL = preload("res://assets/mühle.glb")
 static func get_cost() -> int:
 	return 80  # purchase cost
 
+func _create_collision_shape() -> CollisionShape3D:
+	# Sphere collision for wind tower base
+	var collision_node := CollisionShape3D.new()
+	var shape := SphereShape3D.new()
+	shape.radius = 1.5
+	collision_node.shape = shape
+	collision_node.position = Vector3(0, 1.5, 0)
+	return collision_node
+
 func _ready() -> void:
 	_model_visual = MODEL.instantiate()
 	add_child(_model_visual)
@@ -44,14 +53,6 @@ func _ready() -> void:
 	_cylinder_visual.material_override = mat
 	_model_visual.add_child(_cylinder_visual)
 
-	# Collision shape for tower itself
-	var collision_shape = CollisionShape3D.new()
-	var shape = SphereShape3D.new()
-	shape.radius = 1.5
-	collision_shape.shape = shape
-	collision_shape.position = Vector3(0, 1.5, 0)
-	add_child(collision_shape)
-
 	# Persistent detection area — wait 2 frames for physics to initialize
 	await get_tree().physics_frame
 	await get_tree().physics_frame
@@ -70,6 +71,8 @@ func _setup_detection_area() -> void:
 	_detection_area = Area3D.new()
 	_detection_area.scale = Vector3.ONE  # Ensure no scaling inheritance
 	_detection_area.collision_mask = 2 # Only detect enemies
+	_detection_area.input_ray_pickable = false
+	_detection_area.collision_layer = 0
 	var col = CollisionShape3D.new()
 	col.scale = Vector3.ONE  # Ensure collision shape has uniform scale
 	var sphere = SphereShape3D.new()

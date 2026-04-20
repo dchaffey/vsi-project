@@ -5,6 +5,63 @@ class_name Building
 
 var _hover_mat: StandardMaterial3D = null  # cached overlay — allocated on first hover, shared across frames
 
+func _notification(what: int) -> void:
+	# Fires even when subclass overrides _ready() without super — create collision immediately, defer debug
+	if what == NOTIFICATION_READY:
+		_create_collision_shape_node()
+		call_deferred("_spawn_collision_debug_meshes")
+
+func _create_collision_shape_node() -> void:
+	# Create and add collision shape node from subclass
+	var collision_node := _create_collision_shape()
+	if collision_node:
+		add_child(collision_node)
+
+func _create_collision_shape() -> CollisionShape3D:
+	# Return fully configured collision shape node — subclass must override
+	assert(false, "Building._create_collision_shape() must be overridden")
+	return null
+
+func _spawn_collision_debug_meshes() -> void:
+	# Semi-transparent orange overlay matching each CollisionShape3D child's geometry
+	var mat := StandardMaterial3D.new()
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(1.0, 0.5, 0.0, 0.3)
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED  # visible from inside and outside
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_attach_debug_mesh_to_shapes(self, mat)
+
+func _attach_debug_mesh_to_shapes(node: Node, mat: StandardMaterial3D) -> void:
+	# Recursively finds CollisionShape3D nodes and parents a matching MeshInstance3D to each
+	if node is CollisionShape3D and node.shape != null:
+		var mesh := _shape_to_debug_mesh(node.shape)
+		if mesh:
+			var mi := MeshInstance3D.new()
+			mi.mesh = mesh
+			mi.material_override = mat
+			node.add_child(mi)
+	for child in node.get_children():
+		_attach_debug_mesh_to_shapes(child, mat)
+
+func _shape_to_debug_mesh(shape: Shape3D) -> Mesh:
+	# Converts a collision shape to an equivalent renderable mesh
+	if shape is CylinderShape3D:
+		var m := CylinderMesh.new()
+		m.height = shape.height
+		m.top_radius = shape.radius
+		m.bottom_radius = shape.radius
+		return m
+	if shape is SphereShape3D:
+		var m := SphereMesh.new()
+		m.radius = shape.radius
+		m.height = shape.radius * 2.0
+		return m
+	if shape is BoxShape3D:
+		var m := BoxMesh.new()
+		m.size = shape.size
+		return m
+	return null
+
 static func get_cost() -> int:
 	# Purchase cost in currency units — subclass must override
 	assert(false, "Building.get_cost() must be overridden")

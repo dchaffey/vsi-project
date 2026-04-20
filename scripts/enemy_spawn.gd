@@ -61,20 +61,23 @@ func create_enemy() -> RigidBody3D:
 	return enemy
 
 
-## Build and attach the capsule mesh to enemy.
+## Build and attach the box mesh to enemy.
 func _attach_mesh(enemy: RigidBody3D) -> void:
 	var mesh_instance := MeshInstance3D.new()
-	var capsule_mesh := CapsuleMesh.new()
+	var box_mesh := BoxMesh.new()
+	box_mesh.size = Vector3(1.2, 2.0, 1.2)  # Stretched cube (rectangular prism)
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = Color(0.85, 0.85, 0.85)  # light grey
-	capsule_mesh.material = mat
-	mesh_instance.mesh = capsule_mesh
+	box_mesh.material = mat
+	mesh_instance.mesh = box_mesh
 	enemy._material = mat  # stored on enemy for HP-based colour changes
 	enemy.add_child(mesh_instance)
 
 
-## Build and attach the capsule collision shape to enemy.
+## Build and attach the box collision shape to enemy.
 func _attach_collision(enemy: RigidBody3D) -> void:
 	var collision_shape := CollisionShape3D.new()
-	collision_shape.shape = CapsuleShape3D.new()
+	var box_shape := BoxShape3D.new()
+	box_shape.size = Vector3(1.2, 2.0, 1.2)  # Match mesh size
+	collision_shape.shape = box_shape
 	enemy.add_child(collision_shape)

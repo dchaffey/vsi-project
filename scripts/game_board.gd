@@ -132,88 +132,78 @@ class RingDrawer extends Control:
 # --- Main GameBoard Manager (Node3D) ---
 var _ui := GameBoardUI.new()
 var _ring_drawer := RingDrawer.new()
-var _tower_shelf := Node3D.new()
-var _board_panel: Node3D
+var _tower_shelf := Node3D.new()  # VR only
+var _board_panel: Node3D           # VR only — viewport_2d_in_3d
 var _terrain: StaticBody3D
+var _is_vr: bool = false           # set by initialize() before any setup
 
 func _ready() -> void:
 	add_to_group("game_board")
 	add_to_group("hud")
-	
 	_ui.add_child(_ring_drawer)
-	_tower_shelf.set_script(preload("res://scripts/vr_tower_shelf.gd"))
 
 func _setup_3d_elements() -> void:
-	# Default dimensions if terrain is not yet provided
 	var half_w = 32.0
-	var half_d = 32.0
 	var max_h = 10.0
-	
+
 	if _terrain:
 		half_w = (_terrain.terrain_width - 1) * _terrain.cell_size * 0.5
-		half_d = (_terrain.terrain_depth - 1) * _terrain.cell_size * 0.5
 		max_h = _terrain.max_height
 
-	# 1. Main Stats Board
+	# 1. Main Stats Board (Physical panel in world space)
 	var vp_scene = preload("res://addons/godot-xr-tools/objects/viewport_2d_in_3d.tscn")
 	_board_panel = vp_scene.instantiate()
 	add_child(_board_panel)
-	
-	# Board size (meters) - Scaled 5x
+
 	var board_w = 300.0
 	var board_h = 200.0
 	_board_panel.screen_size = Vector2(board_w, board_h)
 	_board_panel.viewport_size = Vector2(1280, 800)
-	
-	# Position it in the middle of the West edge (negative X)
-	# We offset it so it's outside the terrain walls
+
 	var pos_x = -half_w - 50.0
-	var pos_z = 0.0
-	# Above the wall top (max_h + 30). 
-	# With board_h=200, center at max_h+150 puts the bottom at max_h+50, which is 20m above the wall top.
 	var pos_y = max_h + 150.0
-	
-	_board_panel.position = Vector3(pos_x, pos_y, pos_z)
-	
-	# Face East (towards the center of the terrain)
+	_board_panel.position = Vector3(pos_x, pos_y, 0.0)
 	_board_panel.rotation_degrees = Vector3(0, -90, 0)
-	
-	# Ensure it's on layer 1 for mouse raycast
+	# Ensure it can be hit by both mouse and VR pointer
 	_board_panel.collision_layer = 1 | (1 << 20)
 
 	# 2. Tower Shelf
+	_tower_shelf.set_script(preload("res://scripts/vr_tower_shelf.gd"))
 	add_child(_tower_shelf)
-	
-	# Position shelf below the board, scaled offset
 	_tower_shelf.position = _board_panel.position + _board_panel.transform.basis.y * (-board_h * 0.5 - 60.0) + _board_panel.transform.basis.z * 25.0
 	_tower_shelf.rotation = _board_panel.rotation
-	_tower_shelf.rotate_object_local(Vector3.RIGHT, -deg_to_rad(15)) # Angle it slightly up
-	
-	# Scale the shelf 5x (6.0 -> 30.0)
+	_tower_shelf.rotate_object_local(Vector3.RIGHT, -deg_to_rad(15))
 	_tower_shelf.scale = Vector3(30.0, 30.0, 30.0)
 
 func _setup_ui_elements() -> void:
-	# Wait for viewport to be ready and render one frame so the texture is valid
+	# Wait for the board panel to be ready in the tree
 	if not _board_panel.is_node_ready(): await _board_panel.ready
+	
+	# Viewport2DIn3D needs an extra frame to finish setting up its internal Viewport and Mesh
 	await get_tree().process_frame
+	await get_tree().process_frame
+	
 	var vp = _board_panel.get_node_or_null("Viewport")
-	assert(vp != null, "GameBoard: Viewport not found in Viewport2DIn3D")
-	vp.add_child(_ui)
+	if vp:
+		vp.add_child(_ui)
+	else:
+		push_error("GameBoard: Viewport not found in Viewport2DIn3D")
 
-func initialize(player: CharacterBody3D, objective: Area3D, terrain: StaticBody3D) -> void:
+func initialize(player: CharacterBody3D, objective: Area3D, terrain: StaticBody3D, is_vr: bool = false) -> void:
 	_terrain = terrain
+	_is_vr = is_vr
 	_setup_3d_elements()
-	_setup_ui_elements()
-	
-	# Ensure UI is ready before connecting signals
+	await _setup_ui_elements()
+
 	if not _ui.is_node_ready(): await _ui.ready
-	
+
 	objective.hp_changed.connect(_ui.update_hp)
 	_ui.update_hp(objective.current_hp, objective.max_hp)
-	
+
 	player.money_changed.connect(_ui.update_money)
 	_ui.update_money(player.money)
 
+	# Shelf signal connection for both VR and Desktop
 	_tower_shelf.tower_selected.connect(func(script_path, cost):
 		if player.money >= cost:
 			player.start_placement(script_path)

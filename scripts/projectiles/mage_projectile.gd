@@ -49,6 +49,8 @@ func setup(p_start: Vector3, p_target: Node3D) -> void:
 	
 	body_entered.connect(_on_body_entered)
 	collision_mask = 2
+	collision_layer = 0
+	input_ray_pickable = false
 
 func _physics_process(delta: float) -> void:
 	if not is_instance_valid(target_node):

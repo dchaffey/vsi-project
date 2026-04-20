@@ -34,10 +34,12 @@ var _placement_script: String = ""
 var _placement_cost: int = 0  # cost of tower being placed
 var _ghost_tower: Node3D = null
 var _ghost_rotation: Vector3 = Vector3.ZERO  # preserve ghost rotation for placement
+var _query_shape := SphereShape3D.new()
 
 const EXPLOSION_PREFAB = preload("res://addons/ExplosionExport/Prefab.tscn")
 
 func _ready() -> void:
+	_query_shape.radius = explosion_radius
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	
 	# Camera setup
@@ -232,7 +234,7 @@ func _explode_at_mouse() -> void:
 
 	_spawn_explosion(hit_point)
 
-	var bodies = await _get_bodies_in_sphere(hit_point, explosion_radius)
+	var bodies = _get_bodies_in_sphere(hit_point, explosion_radius)
 	for body in bodies:
 		if not body is RigidBody3D:
 			continue
@@ -255,6 +257,8 @@ func _start_suck() -> void:
 	_suck_timer = 3.0
 	_active_suck_area = Area3D.new()
 	_active_suck_area.collision_mask = 2  # only detect enemies
+	_active_suck_area.input_ray_pickable = false
+	_active_suck_area.collision_layer = 0
 	var col = CollisionShape3D.new()
 	var sphere = SphereShape3D.new()
 	sphere.radius = explosion_radius
@@ -329,20 +333,20 @@ func _get_raycast_hit_point() -> Vector3:
 	return ray_result.position
 
 func _get_bodies_in_sphere(center: Vector3, radius: float) -> Array[Node3D]:
-	var area = Area3D.new()
-	area.collision_mask = 2
-	var col = CollisionShape3D.new()
-	var sphere = SphereShape3D.new()
-	sphere.radius = radius
-	col.shape = sphere
-	area.add_child(col)
+	if radius <= 0.0:
+		return []
+		
+	if not is_equal_approx(_query_shape.radius, radius):
+		_query_shape.radius = radius
+		
+	var query := PhysicsShapeQueryParameters3D.new()
+	query.shape = _query_shape
+	query.transform = Transform3D(Basis(), center)
+	query.collision_mask = 2
 	
-	get_parent().add_child(area)
-	area.global_position = center
+	var results = get_world_3d().direct_space_state.intersect_shape(query)
+	var bodies: Array[Node3D] = []
+	for result in results:
+		bodies.append(result.collider)
 	
-	await get_tree().physics_frame
-	await get_tree().physics_frame
-	
-	var bodies = area.get_overlapping_bodies()
-	area.queue_free()
 	return bodies

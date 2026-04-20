@@ -1,5 +1,15 @@
 extends Node3D
 
+## MODE TOGGLE INSTRUCTIONS:
+## 1. DESKTOP MODE (Default):
+##    - Set ENABLE_VR = false (below).
+##    - In project.godot: [rendering] xr/enabled=false, vrs/mode=0.
+## 2. VR MODE:
+##    - Set ENABLE_VR = true (below).
+##    - (Optional but recommended for performance) In project.godot: [rendering] xr/enabled=true, vrs/mode=2.
+
+const ENABLE_VR := false
+
 var terrain: StaticBody3D
 var defence_objective: Area3D
 var player: CharacterBody3D
@@ -19,32 +29,45 @@ var _wave_delay_timer: Timer   # cooldown before next wave starts
 var wave_delay: float = 8.0    # seconds between waves
 
 func _ready() -> void:
-	var xr_interface = XRServer.find_interface("OpenXR")
-	if xr_interface:
-		print("OpenXR interface found. Attempting to initialize VR...")
-		var start_xr_scene := preload("res://addons/godot-xr-tools/xr/start_xr.tscn")
-		_start_xr = start_xr_scene.instantiate()
-		_start_xr.enable_passthrough = is_passthrough
-		add_child(_start_xr)  # This triggers StartXR._ready() which calls initialize()
-		
-		# Give StartXR a frame to complete its internal initialization
-		await get_tree().process_frame
-		
-		if xr_interface.is_initialized():
-			is_vr_enabled = true
-			is_passthrough = _start_xr.enable_passthrough
+	# Immediately disable XR to avoid black screen on desktop fallback.
+	# We will re-enable it only if XR initialization succeeds.
+	get_viewport().use_xr = false
+	
+	if ENABLE_VR:
+		var xr_interface = XRServer.find_interface("OpenXR")
+		if xr_interface:
+			print("OpenXR interface found. Attempting to initialize VR...")
+			var start_xr_scene := preload("res://addons/godot-xr-tools/xr/start_xr.tscn")
+			_start_xr = start_xr_scene.instantiate()
+			_start_xr.enable_passthrough = is_passthrough
+			add_child(_start_xr)  # This triggers StartXR._ready() which calls initialize()
 			
-			# Docs recommendation: Disable VSync to prevent frame capping by desktop monitor
-			DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+			# Give StartXR a frame to complete its internal initialization
+			await get_tree().process_frame
 			
-			# Docs recommendation: Match physics ticks to HMD refresh rate (Quest 3 default is ~90Hz)
-			Engine.physics_ticks_per_second = 90
-			
-			print("OpenXR initialized successfully. VR mode active (90Hz Physics, VSync Disabled).")
+			if xr_interface.is_initialized():
+				is_vr_enabled = true
+				is_passthrough = _start_xr.enable_passthrough
+				
+				# Successfully initialized, now we can enable XR on the viewport
+				get_viewport().use_xr = true
+				
+				# Docs recommendation: Disable VSync to prevent frame capping by desktop monitor
+				DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+				
+				# Docs recommendation: Match physics ticks to HMD refresh rate (Quest 3 default is ~90Hz)
+				Engine.physics_ticks_per_second = 90
+				
+				print("OpenXR initialized successfully. VR mode active (90Hz Physics, VSync Disabled).")
+			else:
+				print("OpenXR failed to initialize. Falling back to desktop mode.")
+				# Clean up the XR start node
+				_start_xr.queue_free()
+				_start_xr = null
 		else:
-			print("OpenXR failed to initialize. Falling back to desktop mode.")
+			print("OpenXR interface not found. Desktop mode active.")
 	else:
-		print("OpenXR interface not found. Desktop mode active.")
+		print("VR manually disabled via ENABLE_VR. Desktop mode active.")
 
 	# Boost global gravity programmatically (optional but effective)
 	ProjectSettings.set_setting("physics/3d/default_gravity", 19.6)
@@ -116,6 +139,8 @@ func spawn_environment() -> void:
 		sky.sky_material = ProceduralSkyMaterial.new()
 		env.sky = sky
 		env.background_mode = Environment.BG_SKY
+		env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+		env.ambient_light_energy = 0.7 # Reduced from default 1.0
 
 	world_env.environment = env
 	add_child(world_env)
@@ -125,6 +150,7 @@ func spawn_sunlight() -> void:
 	var sun = DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-45, 45, 0)
 	sun.shadow_enabled = true
+	sun.light_energy = 0.8 # Reduced from default 1.0
 	add_child(sun)
 	print("Sun light spawned.")
 
@@ -157,7 +183,7 @@ func spawn_game_board() -> void:
 	game_board = Node3D.new()
 	game_board.set_script(load("res://scripts/game_board.gd"))
 	add_child(game_board)
-	await game_board.initialize(player, defence_objective, terrain)
+	await game_board.initialize(player, defence_objective, terrain, is_vr_enabled)
 	player.game_board = game_board
 	print("GameBoard spawned and initialized.")
 
@@ -320,34 +346,8 @@ func spawn_walls() -> void:
 	var wall_material = StandardMaterial3D.new()
 	wall_material.albedo_color = Color(0.3, 0.3, 0.3) # Dark grey
 
-	# Create base floor platform — much larger for VR standing space
-	var base_platform = StaticBody3D.new()
-	base_platform.position = Vector3(0, -base_height / 2.0, 0) # Positioned so top sits at y=0
-	base_platform.collision_layer = 1
-
-	var vr_floor_size = 500.0 # Large area for VR player to stand on
-
-	# Skip floor mesh in passthrough mode — real-world floor is visible
-	if not (is_vr_enabled and is_passthrough):
-		var floor_mesh = MeshInstance3D.new()
-		var floor_box = BoxMesh.new()
-		floor_box.size = Vector3(vr_floor_size, base_height, vr_floor_size)
-		floor_mesh.mesh = floor_box
-		var floor_material = StandardMaterial3D.new()
-		floor_material.albedo_color = Color(0.3, 0.3, 0.3)
-		floor_mesh.material_override = floor_material
-		base_platform.add_child(floor_mesh)
-
-	var floor_collision = CollisionShape3D.new()
-	var floor_shape = BoxShape3D.new()
-	floor_shape.size = Vector3(vr_floor_size, base_height, vr_floor_size)
-	floor_collision.shape = floor_shape
-	base_platform.add_child(floor_collision)
-
-	add_child(base_platform)
-
-	# Wall data: [position, size] — walls extend from ground (y=0) upward
-	var wall_base_y = wall_height / 2.0
+	# Wall data: [position, size] — walls extend from ground (y=0) downward
+	var wall_base_y = -wall_height / 2.0
 	var walls = [
 		[Vector3(0, wall_base_y, -half_d), Vector3(terrain_w, wall_height, wall_thickness)], # North
 		[Vector3(0, wall_base_y, half_d), Vector3(terrain_w, wall_height, wall_thickness)],  # South
