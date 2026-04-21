@@ -10,15 +10,13 @@ var _query_shape := SphereShape3D.new()
 static func get_cost() -> int:
 	return 20  # purchase cost
 
-func _create_collision_shape() -> CollisionShape3D:
-	# Cylinder collision approximating tower geometry
-	var collision_node := CollisionShape3D.new()
-	var shape := CylinderShape3D.new()
-	shape.height = 17
-	shape.radius = 1.6
-	collision_node.shape = shape
-	collision_node.position = Vector3(0, 8.5, 0)
-	return collision_node
+func _get_collision_box_size() -> Vector3:
+	# Tall box matching the mage tower model — used for physics and mouse picking
+	return Vector3(3.2, 17.0, 3.2)
+
+func get_range() -> float:
+	# Expose shooting radius so hover and placement preview can visualize range
+	return range_radius
 
 func _ready() -> void:
 	_query_shape.radius = range_radius

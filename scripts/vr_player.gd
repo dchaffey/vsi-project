@@ -115,7 +115,7 @@ func _on_right_button_pressed(button_name: String) -> void:
 	else:
 		if button_name == "trigger_click":
 			if game_board:
-				game_board.hide_building_ring()
+				game_board.hide_building_menu()
 
 func start_placement(script_path: String) -> void:
 	cancel_placement()
@@ -133,7 +133,10 @@ func start_placement(script_path: String) -> void:
 	_ghost_tower.set_physics_process(false)
 	_ghost_tower.set_process(false)
 	_apply_ghost_material(_ghost_tower)
-	
+	# Preview the attack radius while the ghost follows the controller ray
+	if _ghost_tower.has_method("show_range_indicator"):
+		_ghost_tower.show_range_indicator()
+
 	if is_instance_valid(_world_raycast):
 		_world_raycast.add_exception_rid(_ghost_tower.get_rid())
 
@@ -166,6 +169,9 @@ func _update_ghost_color(valid: bool) -> void:
 
 func _apply_ghost_material(node: Node) -> void:
 	for child in node.get_children():
+		# Skip the tower's range indicator — it owns its own transparent blue material
+		if child.is_in_group("range_indicator"):
+			continue
 		if child is MeshInstance3D:
 			var mat = StandardMaterial3D.new()
 			mat.transparency = StandardMaterial3D.TRANSPARENCY_ALPHA
@@ -175,6 +181,9 @@ func _apply_ghost_material(node: Node) -> void:
 
 func _apply_custom_color(node: Node, color: Color) -> void:
 	for child in node.get_children():
+		# Leave the range indicator blue — don't tint it with the validity color
+		if child.is_in_group("range_indicator"):
+			continue
 		if child is MeshInstance3D:
 			if child.material_override is StandardMaterial3D:
 				child.material_override.albedo_color = color

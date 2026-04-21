@@ -8,15 +8,13 @@ var _query_shape := CylinderShape3D.new()
 static func get_cost() -> int:
 	return 20  # purchase cost
 
-func _create_collision_shape() -> CollisionShape3D:
-	# Cylinder collision approximating barracks geometry
-	var collision_node := CollisionShape3D.new()
-	var shape := CylinderShape3D.new()
-	shape.height = 8
-	shape.radius = _collision_radius
-	collision_node.shape = shape
-	collision_node.position = Vector3(0, 4, 0)
-	return collision_node
+func _get_collision_box_size() -> Vector3:
+	# Box matching barracks footprint — width/depth follow the damage radius
+	return Vector3(_collision_radius * 2.0, 8.0, _collision_radius * 2.0)
+
+func get_range() -> float:
+	# Spikes damage only on contact — no ranged indicator
+	return 0.0
 
 func _ready() -> void:
 	_query_shape.height = 8.0

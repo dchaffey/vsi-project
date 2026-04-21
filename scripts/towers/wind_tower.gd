@@ -18,14 +18,13 @@ const MODEL = preload("res://assets/mühle.glb")
 static func get_cost() -> int:
 	return 80  # purchase cost
 
-func _create_collision_shape() -> CollisionShape3D:
-	# Sphere collision for wind tower base
-	var collision_node := CollisionShape3D.new()
-	var shape := SphereShape3D.new()
-	shape.radius = 1.5
-	collision_node.shape = shape
-	collision_node.position = Vector3(0, 1.5, 0)
-	return collision_node
+func _get_collision_box_size() -> Vector3:
+	# Compact cube for the windmill base — used for physics and mouse picking
+	return Vector3(3.0, 3.0, 3.0)
+
+func get_range() -> float:
+	# Wind blast radius already has its own persistent cylinder visual, so suppress the hover sphere
+	return 0.0
 
 func _ready() -> void:
 	_model_visual = MODEL.instantiate()

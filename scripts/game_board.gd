@@ -2,29 +2,29 @@ extends Node3D
 
 # --- GameBoard UI (Stats Display) ---
 class GameBoardUI extends Control:
-	var hp_label: Label
-	var money_label: Label
-	var wave_label: Label
-	var _countdown_secs: float = 0.0
-	var _next_wave_num: int = 0
-	var _total_waves: int = 0
+	var hp_label: Label  # defence objective HP readout
+	var money_label: Label  # current cash readout (mirrored in 3D by the tower shelf label)
+	var wave_label: Label  # current wave / countdown to next
+	var _countdown_secs: float = 0.0  # seconds until next wave — drives countdown text
+	var _next_wave_num: int = 0  # wave number displayed during countdown
+	var _total_waves: int = 0  # total waves for "X / Y" display
 
 	func _ready() -> void:
 		set_anchors_preset(Control.PRESET_FULL_RECT)
-		
-		# Background
+
+		# Background panel — dark translucent backdrop for readability
 		var bg = ColorRect.new()
 		bg.color = Color(0.1, 0.1, 0.1, 0.8)
 		bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 		add_child(bg)
 
-		# HP Label
+		# HP Label — top left
 		hp_label = Label.new()
 		hp_label.position = Vector2(40, 40)
 		hp_label.add_theme_font_size_override("font_size", 48)
 		add_child(hp_label)
 
-		# Money Label
+		# Money Label — top right
 		money_label = Label.new()
 		money_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 		money_label.position = Vector2(-400, 40)
@@ -32,7 +32,7 @@ class GameBoardUI extends Control:
 		money_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		add_child(money_label)
 
-		# Wave Label
+		# Wave Label — below HP
 		wave_label = Label.new()
 		wave_label.position = Vector2(40, 120)
 		wave_label.add_theme_font_size_override("font_size", 48)
@@ -66,81 +66,92 @@ class GameBoardUI extends Control:
 		assert(wave_label != null, "GameBoardUI: _update_wave_text called before _ready")
 		wave_label.text = "Wave: %d / %d  —  Next in %ds" % [_next_wave_num - 1, _total_waves, ceili(_countdown_secs)]
 
-# --- Ring Drawer (Radial Menu on the board) ---
-class RingDrawer extends Control:
-	var selected_building: Node3D = null
-	var ring_screen_pos: Vector2 = Vector2.ZERO
-	var hovered_button: int = -1
-	var ring_radius: float = 180.0
-	var button_radius: float = 70.0
-	var ring_buttons: Array = [
-		{"name": "Upgrade", "action": "upgrade", "angle": PI/6, "color": Color.GREEN},
-		{"name": "Destroy", "action": "destroy", "angle": -PI/2, "color": Color.RED},
-		{"name": "Close", "action": "close", "angle": 5*PI/6, "color": Color.GRAY},
-	]
 
-	func _ready() -> void:
-		mouse_filter = MOUSE_FILTER_PASS
-		set_anchors_preset(Control.PRESET_FULL_RECT)
+# --- Building Menu (3D clickable spheres that replace the old radial menu) ---
+class BuildingMenu3D extends Node3D:
+	# Three clickable world-space spheres (upgrade / sell / move) that float above a selected building.
+	signal action_selected(action: String)  # emits "upgrade", "sell", or "move" on sphere click
 
-	func _process(_delta: float) -> void:
-		if not is_instance_valid(selected_building):
-			selected_building = null
-			queue_redraw()
-			return
-		
-		ring_screen_pos = size / 2.0
-		queue_redraw()
+	var _building: Node3D = null  # building this menu acts on — used only to anchor position
 
-	func _draw() -> void:
-		if not selected_building: return
-		var center := ring_screen_pos
-		draw_arc(center, ring_radius, 0.0, TAU, 64, Color.WHITE, 5.0)
-		for i in range(ring_buttons.size()):
-			var button = ring_buttons[i]
-			var button_pos = center + Vector2(cos(button.angle), sin(button.angle)) * ring_radius
-			var color = button.color if i == hovered_button else Color(button.color, 0.6)
-			draw_circle(button_pos, button_radius, color)
+	const SPHERE_RADIUS: float = 1.0  # visual radius of each action sphere
+	const SPHERE_SPACING: float = 3.5  # horizontal gap between spheres
+	const MENU_HEIGHT_OFFSET: float = 2.0  # extra height above tower top so spheres don't clip model
 
-	func _gui_input(event: InputEvent) -> void:
-		if not selected_building: return
-		if event is InputEventMouseMotion:
-			_update_hovered_button(event.position)
-		elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-			_handle_button_click(event.position)
+	func setup(building: Node3D) -> void:
+		# Anchor the menu above the building's top and spawn the three action spheres
+		_building = building
+		var top_y := _building_top_y(building)
+		global_position = building.global_position + Vector3(0.0, top_y + MENU_HEIGHT_OFFSET, 0.0)
+		_create_sphere("upgrade", Vector3(-SPHERE_SPACING, 0.0, 0.0), Color(0.2, 1.0, 0.3))
+		_create_sphere("sell", Vector3(0.0, 0.0, 0.0), Color(1.0, 0.25, 0.25))
+		_create_sphere("move", Vector3(SPHERE_SPACING, 0.0, 0.0), Color(0.3, 0.6, 1.0))
 
-	func _update_hovered_button(mouse_pos: Vector2) -> void:
-		var old_hovered = hovered_button
-		hovered_button = -1
-		for i in range(ring_buttons.size()):
-			var button = ring_buttons[i]
-			var button_pos = ring_screen_pos + Vector2(cos(button.angle), sin(button.angle)) * ring_radius
-			if mouse_pos.distance_to(button_pos) <= button_radius:
-				hovered_button = i
-				break
-		if old_hovered != hovered_button: queue_redraw()
+	func _building_top_y(building: Node3D) -> float:
+		# Height of the building's collision box — used to place menu above its roof
+		if building.has_method("_get_collision_box_size"):
+			var size: Vector3 = building._get_collision_box_size()
+			return size.y
+		return 4.0
 
-	func _handle_button_click(mouse_pos: Vector2) -> void:
-		if hovered_button < 0: return
-		var button = ring_buttons[hovered_button]
-		match button.action:
-			"upgrade": if selected_building.has_method("upgrade"): selected_building.upgrade()
-			"destroy": if selected_building.has_method("destroy"): selected_building.destroy()
-			"close": selected_building = null
-		accept_event()
+	func _create_sphere(action: String, offset: Vector3, color: Color) -> void:
+		# Build one clickable action sphere: Area3D + collision + mesh + label, wired to action_selected.
+		var area := Area3D.new()
+		area.position = offset
+		area.collision_layer = 1  # same layer as ground/towers so mouse raycasts pick it up
+		area.collision_mask = 0
+		area.input_ray_pickable = true
+		add_child(area)
+
+		var col := CollisionShape3D.new()
+		var shape := SphereShape3D.new()
+		shape.radius = SPHERE_RADIUS
+		col.shape = shape
+		area.add_child(col)
+
+		var mesh_inst := MeshInstance3D.new()
+		var mesh := SphereMesh.new()
+		mesh.radius = SPHERE_RADIUS
+		mesh.height = SPHERE_RADIUS * 2.0
+		mesh_inst.mesh = mesh
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = color
+		mat.emission_enabled = true
+		mat.emission = color
+		mat.emission_energy_multiplier = 0.6
+		mesh_inst.material_override = mat
+		area.add_child(mesh_inst)
+
+		# Always-facing label so the player can read the action
+		var label := Label3D.new()
+		label.text = action.capitalize()
+		label.position = Vector3(0.0, SPHERE_RADIUS + 0.6, 0.0)
+		label.pixel_size = 0.012
+		label.font_size = 48
+		label.outline_size = 8
+		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		label.no_depth_test = true
+		area.add_child(label)
+
+		area.input_event.connect(func(_cam, event, _pos, _norm, _idx):
+			if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+				action_selected.emit(action)
+				get_viewport().set_input_as_handled()
+		)
+
 
 # --- Main GameBoard Manager (Node3D) ---
-var _ui := GameBoardUI.new()
-var _ring_drawer := RingDrawer.new()
-var _tower_shelf := Node3D.new()  # VR only
-var _board_panel: Node3D           # VR only — viewport_2d_in_3d
-var _terrain: StaticBody3D
-var _is_vr: bool = false           # set by initialize() before any setup
+var _ui := GameBoardUI.new()  # 2D overlay shown on the viewport panel
+var _menu: BuildingMenu3D = null  # active action menu for the currently-selected building, if any
+var _tower_shelf := Node3D.new()  # world-space shelf of buyable towers
+var _shelf_money_label: Label3D = null  # 3D font showing current cash next to the shop
+var _board_panel: Node3D  # Viewport2DIn3D hosting the stats UI
+var _terrain: StaticBody3D  # referenced for sizing the board placement
+var _is_vr: bool = false  # set by initialize() before any setup
 
 func _ready() -> void:
 	add_to_group("game_board")
 	add_to_group("hud")
-	_ui.add_child(_ring_drawer)
 
 func _setup_3d_elements() -> void:
 	var half_w = 32.0
@@ -167,7 +178,7 @@ func _setup_3d_elements() -> void:
 	# Ensure it can be hit by both mouse and VR pointer
 	_board_panel.collision_layer = 1 | (1 << 20)
 
-	# 2. Tower Shelf
+	# 2. Tower Shelf — world-space shop of buyable towers
 	_tower_shelf.set_script(preload("res://scripts/vr_tower_shelf.gd"))
 	add_child(_tower_shelf)
 	_tower_shelf.position = _board_panel.position + _board_panel.transform.basis.y * (-board_h * 0.5 - 60.0) + _board_panel.transform.basis.z * 25.0
@@ -175,14 +186,27 @@ func _setup_3d_elements() -> void:
 	_tower_shelf.rotate_object_local(Vector3.RIGHT, -deg_to_rad(15))
 	_tower_shelf.scale = Vector3(30.0, 30.0, 30.0)
 
+	# 3. 3D Money Label — floats beside the shelf so cash is visible while shopping
+	_shelf_money_label = Label3D.new()
+	_shelf_money_label.text = "$0"
+	_shelf_money_label.pixel_size = 0.006
+	_shelf_money_label.font_size = 96
+	_shelf_money_label.outline_size = 16
+	_shelf_money_label.modulate = Color(1.0, 0.9, 0.3)
+	_shelf_money_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	_shelf_money_label.no_depth_test = true
+	# Place to the right of the shelf (shelf-local space) and slightly above
+	_shelf_money_label.position = Vector3(3.2, 2.0, 0.0)
+	_tower_shelf.add_child(_shelf_money_label)
+
 func _setup_ui_elements() -> void:
 	# Wait for the board panel to be ready in the tree
 	if not _board_panel.is_node_ready(): await _board_panel.ready
-	
+
 	# Viewport2DIn3D needs an extra frame to finish setting up its internal Viewport and Mesh
 	await get_tree().process_frame
 	await get_tree().process_frame
-	
+
 	var vp = _board_panel.get_node_or_null("Viewport")
 	if vp:
 		vp.add_child(_ui)
@@ -200,8 +224,11 @@ func initialize(player: CharacterBody3D, objective: Area3D, terrain: StaticBody3
 	objective.hp_changed.connect(_ui.update_hp)
 	_ui.update_hp(objective.current_hp, objective.max_hp)
 
+	# Route money changes to both the 2D overlay and the 3D shelf label
 	player.money_changed.connect(_ui.update_money)
+	player.money_changed.connect(_update_shelf_money)
 	_ui.update_money(player.money)
+	_update_shelf_money(player.money)
 
 	# Shelf signal connection for both VR and Desktop
 	_tower_shelf.tower_selected.connect(func(script_path, cost):
@@ -209,45 +236,72 @@ func initialize(player: CharacterBody3D, objective: Area3D, terrain: StaticBody3
 			player.start_placement(script_path)
 	)
 
+func _update_shelf_money(amount: float) -> void:
+	# Refresh the 3D cash label next to the shop — integer dollars are enough for the shop view
+	if _shelf_money_label:
+		_shelf_money_label.text = "$%d" % int(amount)
+
 func update_wave(current: int, total: int) -> void:
 	_ui.update_wave(current, total)
 
 func start_wave_countdown(next_wave: int, total: int, delay: float) -> void:
 	_ui.start_wave_countdown(next_wave, total, delay)
 
-func show_building_ring(building: Node3D) -> void:
-	_ring_drawer.selected_building = building
-	_ring_drawer.hovered_button = -1
+func show_building_menu(building: Node3D) -> void:
+	# Close any prior menu, then spawn the 3D sphere menu anchored to this building
+	hide_building_menu()
+	_menu = BuildingMenu3D.new()
+	add_child(_menu)
+	_menu.setup(building)
+	_menu.action_selected.connect(func(action: String):
+		_on_menu_action(action, building)
+	)
 
-func hide_building_ring() -> void:
-	_ring_drawer.selected_building = null
+func hide_building_menu() -> void:
+	if is_instance_valid(_menu):
+		_menu.queue_free()
+	_menu = null
+
+func _on_menu_action(action: String, building: Node3D) -> void:
+	# Dispatch the clicked sphere to the building's matching handler, then close the menu.
+	# Close BEFORE sell/move because those free the building and would invalidate the menu's anchor.
+	hide_building_menu()
+	if not is_instance_valid(building):
+		return
+	match action:
+		"upgrade":
+			if building.has_method("upgrade"): building.upgrade()
+		"sell":
+			if building.has_method("destroy"): building.destroy()
+		"move":
+			if building.has_method("move"): building.move()
 
 func show_game_over() -> void:
 	var canvas = CanvasLayer.new()
 	canvas.layer = 100
 	add_child(canvas)
-	
+
 	var bg = ColorRect.new()
 	bg.color = Color(0, 0, 0, 0.8)
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	canvas.add_child(bg)
-	
+
 	var center = CenterContainer.new()
 	center.set_anchors_preset(Control.PRESET_FULL_RECT)
 	canvas.add_child(center)
-	
+
 	var v_box = VBoxContainer.new()
 	center.add_child(v_box)
-	
+
 	var l = Label.new()
 	l.text = "GAME OVER"
 	l.add_theme_font_size_override("font_size", 100)
 	v_box.add_child(l)
-	
+
 	var btn = Button.new()
 	btn.text = "RESTART"
 	btn.custom_minimum_size = Vector2(200, 80)
 	btn.pressed.connect(func(): get_tree().reload_current_scene())
 	v_box.add_child(btn)
-	
+
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
