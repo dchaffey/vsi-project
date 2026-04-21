@@ -56,6 +56,12 @@ func _ready() -> void:
 	_start_positions = terrain.get_start_world_positions()
 	defence_objective.enemy_entered.connect(_on_defence_objective_entered)
 
+	# 10% chance to spawn as a giant variant
+	if _rng.randf() < 0.1:
+		scale *= 2.0
+		max_hp *= 2.0
+		hp = max_hp
+
 
 func receive_impact_impulse(direction: Vector3, magnitude: float) -> void:
 	# accumulate impulse for this frame — checked in _process_pathing() to decide ragdoll transition
@@ -231,7 +237,8 @@ func _enter_dead() -> void:
 	_dead_timer = 0.0
 	_state = State.DEAD
 	_unlock_angular_axes()
-	_update_color()
+	if _material:
+		_material.albedo_color = Color(1.0, 0.0, 0.0)  # turn bright red on death
 	died.emit(max_hp)
 
 
