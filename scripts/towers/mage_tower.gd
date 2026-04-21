@@ -7,12 +7,18 @@ var projectiles_per_shot: int = 1
 var _tower_model: Node3D  # reference to the base tower model
 var _query_shape := SphereShape3D.new()
 
+const MAX_TIER: int = 1  # highest reachable upgrade index for the mage — final form is the Mage2 model
+var _tier: int = 0  # current mage upgrade index — 0 = base tower, 1 = Mage2
+
 static func get_cost() -> int:
 	return 20  # purchase cost
 
+static func get_upgrade_cost() -> int:
+	return 30  # currency required to unlock the upgraded mage model + faster fire rate
+
 func _get_collision_box_size() -> Vector3:
 	# Tall box matching the mage tower model — used for physics and mouse picking
-	return Vector3(3.2, 17.0, 3.2)
+	return Vector3(4.2, 9.0, 4.2)
 
 func get_range() -> float:
 	# Expose shooting radius so hover and placement preview can visualize range
@@ -30,8 +36,14 @@ func place(p_position: Vector3, p_rotation: Vector3 = Vector3.ZERO) -> void:
 	global_position = p_position
 	rotation = p_rotation
 
+func can_upgrade() -> bool:
+	# Mage upgrade is available until the tower has been swapped to Mage2
+	return _tier < MAX_TIER
+
 func upgrade() -> void:
-	# Remove base tower model and spawn mage model on upgrade
+	# Swap the base tower model for the Mage2 model and speed up fire rate.
+	assert(can_upgrade(), "Mage tower already at max tier")
+	_tier += 1
 	if is_instance_valid(_tower_model):
 		_tower_model.queue_free()
 
@@ -39,7 +51,6 @@ func upgrade() -> void:
 	var mage_instance := mage_scene.instantiate()
 	mage_instance.position = Vector3(0, 0, 0)
 	add_child(mage_instance)
-	# projectiles_per_shot = 2
 	shoot_interval = 0.5
 	_query_shape.radius = range_radius
 

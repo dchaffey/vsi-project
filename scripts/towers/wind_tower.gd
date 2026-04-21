@@ -13,10 +13,16 @@ var _model_visual: Node3D  # animated windmill model
 var _cylinder_visual: MeshInstance3D  # semi-transparent cylinder showing wind blast area
 var _detection_area: Area3D  # persistent area for enemy detection
 
+const MAX_TIER: int = 1  # upgrade cap — final tier shortens cooldown and strengthens gusts
+var _tier: int = 0  # current wind upgrade index
+
 const MODEL = preload("res://assets/mühle.glb")
 
 static func get_cost() -> int:
 	return 80  # purchase cost
+
+static func get_upgrade_cost() -> int:
+	return 60  # currency required for the wind tower upgrade tier
 
 func _get_collision_box_size() -> Vector3:
 	# Compact cube for the windmill base — used for physics and mouse picking
@@ -61,9 +67,16 @@ func place(p_position: Vector3, p_rotation: Vector3 = Vector3.ZERO) -> void:
 	global_position = p_position
 	rotation = p_rotation
 
+func can_upgrade() -> bool:
+	# Wind upgrade is available until the tier cap is reached
+	return _tier < MAX_TIER
+
 func upgrade() -> void:
-	# Wind tower upgrade placeholder
-	pass
+	# Stronger gusts and a shorter cooldown — no model swap so the windmill stays recognisable.
+	assert(can_upgrade(), "Wind tower already at max tier")
+	_tier += 1
+	wind_force = 35.0
+	blast_cooldown = 4.0
 
 func _setup_detection_area() -> void:
 	# Create persistent Area3D for enemy detection (scale 1,1,1 to avoid Jolt Physics issues)

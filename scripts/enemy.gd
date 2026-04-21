@@ -11,9 +11,8 @@ var terrain: StaticBody3D
 var defence_objective: Area3D
 
 ## Movement speed in world units per second.
-var move_speed: float = 10.0
-## How strongly the enemy is pulled toward the terrain surface height.
-var height_correction_strength: float = 25.0
+var move_speed: float = 20.0
+var jump_strength = 20.0
 
 ## HP and impact damage.
 var hp: float = 30.0
@@ -169,21 +168,13 @@ func _process_pathing(delta: float, pos: Vector3) -> void:
 		)
 		linear_velocity = corrected
 
-	# --- Height correction (PD controller) ---
-	var target_y: float = terrain.get_height_at(pos.x, pos.z) + 1.0
-	var y_error: float = target_y - pos.y
-	if absf(y_error) < 5.0:
-		var p_term: float = y_error * height_correction_strength
-		var d_term: float = -linear_velocity.y * height_correction_strength * 0.5
-		linear_velocity.y += (p_term + d_term) * delta
-
 	# --- Stuck detection: jump if horizontal speed is too low ---
 	_jump_cooldown -= delta
 	var horiz_speed := Vector2(linear_velocity.x, linear_velocity.z).length()
 	if horiz_speed < move_speed * 0.2:
 		_stuck_timer += delta
 		if _stuck_timer > 0.5 and _jump_cooldown <= 0.0:
-			linear_velocity.y = 20.0
+			linear_velocity.y = jump_strength
 			_stuck_timer = 0.0
 			_jump_cooldown = 1.0
 	else:

@@ -77,6 +77,11 @@ static func get_cost() -> int:
 	assert(false, "Building.get_cost() must be overridden")
 	return 0
 
+static func get_upgrade_cost() -> int:
+	# Currency deducted when the upgrade action is confirmed — subclass must override
+	assert(false, "Building.get_upgrade_cost() must be overridden")
+	return 0
+
 func _mouse_enter() -> void:
 	# Overlay a semi-transparent tint and show the attack range sphere to indicate interactability
 	if not _hover_mat:
@@ -169,3 +174,8 @@ func move() -> void:
 func upgrade() -> void:
 	# Upgrade building stats — subclass must override
 	assert(false, "Building.upgrade() must be overridden")
+
+func can_upgrade() -> bool:
+	# True when another upgrade tier is available — subclass must override
+	assert(false, "Building.can_upgrade() must be overridden")
+	return false

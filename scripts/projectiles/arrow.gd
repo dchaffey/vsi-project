@@ -1,7 +1,7 @@
 extends Area3D
 
 ## Damage dealt on hit.
-var damage: float = 25.0
+var damage: float = 10.0
 ## Arrow travel speed in world units per second — used to derive flight duration from distance.
 var speed: float = 100.0
 ## Target enemy — read once in setup() to snapshot destination.

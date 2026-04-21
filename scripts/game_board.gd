@@ -2,12 +2,7 @@ extends Node3D
 
 # --- GameBoard UI (Stats Display) ---
 class GameBoardUI extends Control:
-	var hp_label: Label  # defence objective HP readout
 	var money_label: Label  # current cash readout (mirrored in 3D by the tower shelf label)
-	var wave_label: Label  # current wave / countdown to next
-	var _countdown_secs: float = 0.0  # seconds until next wave — drives countdown text
-	var _next_wave_num: int = 0  # wave number displayed during countdown
-	var _total_waves: int = 0  # total waves for "X / Y" display
 
 	func _ready() -> void:
 		set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -18,12 +13,6 @@ class GameBoardUI extends Control:
 		bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 		add_child(bg)
 
-		# HP Label — top left
-		hp_label = Label.new()
-		hp_label.position = Vector2(40, 40)
-		hp_label.add_theme_font_size_override("font_size", 48)
-		add_child(hp_label)
-
 		# Money Label — top right
 		money_label = Label.new()
 		money_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
@@ -32,70 +21,87 @@ class GameBoardUI extends Control:
 		money_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		add_child(money_label)
 
-		# Wave Label — below HP
-		wave_label = Label.new()
-		wave_label.position = Vector2(40, 120)
-		wave_label.add_theme_font_size_override("font_size", 48)
-		add_child(wave_label)
-
-	func update_hp(curr: float, max_hp: float) -> void:
-		assert(hp_label != null, "GameBoardUI: update_hp called before _ready")
-		hp_label.text = "Objective HP: %d / %d" % [curr, max_hp]
-
 	func update_money(amount: float) -> void:
 		assert(money_label != null, "GameBoardUI: update_money called before _ready")
 		money_label.text = "Money: $%.2f" % amount
 
-	func update_wave(current: int, total: int) -> void:
-		_countdown_secs = 0.0
-		assert(wave_label != null, "GameBoardUI: update_wave called before _ready")
-		wave_label.text = "Wave: %d / %d" % [current, total]
 
-	func start_wave_countdown(next_wave: int, total: int, delay: float) -> void:
-		_next_wave_num = next_wave
-		_total_waves = total
-		_countdown_secs = delay
-		_update_wave_text()
-
-	func _process(delta: float) -> void:
-		if _countdown_secs > 0.0:
-			_countdown_secs -= delta
-			_update_wave_text()
-
-	func _update_wave_text() -> void:
-		assert(wave_label != null, "GameBoardUI: _update_wave_text called before _ready")
-		wave_label.text = "Wave: %d / %d  —  Next in %ds" % [_next_wave_num - 1, _total_waves, ceili(_countdown_secs)]
-
-
-# --- Building Menu (3D clickable spheres that replace the old radial menu) ---
+# --- Building Menu (3D billboarded Label3D buttons above the selected building) ---
 class BuildingMenu3D extends Node3D:
-	# Three clickable world-space spheres (upgrade / sell / move) that float above a selected building.
-	signal action_selected(action: String)  # emits "upgrade", "sell", or "move" on sphere click
+	# Two clickable world-space text buttons (upgrade / sell) that float near a selected building.
+	signal action_selected(action: String)  # emits "upgrade" or "sell" on label click
 
 	var _building: Node3D = null  # building this menu acts on — used only to anchor position
+	var _hovered_action: String = ""  # action name of the button currently under the cursor; "" if none
+	var _tower_was_pickable: bool = true  # remembered state of the building's input_ray_pickable before we disabled it
 
-	const SPHERE_RADIUS: float = 1.0  # visual radius of each action sphere
-	const SPHERE_SPACING: float = 3.5  # horizontal gap between spheres
-	const MENU_HEIGHT_OFFSET: float = 2.0  # extra height above tower top so spheres don't clip model
+	const CLICK_RADIUS: float = 1.4  # sphere hit area covering the billboarded text from any camera angle
+	const VERTICAL_GAP: float = 2.0  # vertical spacing between tower top anchor and each label
+	const UPGRADE_COLOR := Color(0.25, 1.0, 0.35)  # green — tied to money outflow / new tier
+	const SELL_COLOR := Color(1.0, 0.3, 0.3)  # red — tied to destroy / refund
+	const HOVER_COLOR := Color(1.0, 0.95, 0.2)  # yellow — applied on mouse_entered as click affordance
 
 	func setup(building: Node3D) -> void:
-		# Anchor the menu above the building's top and spawn the three action spheres
+		# Anchor the menu at the building's top; spawn upgrade above and sell below that anchor.
+		# The upgrade button is skipped entirely when the tower is already at its final tier.
 		_building = building
+		# Disable picking on the tower while the menu is up so its collision box can't shadow
+		# our buttons (e.g. the sell button that sits below the roofline). Restored in _exit_tree.
+		if building is CollisionObject3D:
+			_tower_was_pickable = (building as CollisionObject3D).input_ray_pickable
+			(building as CollisionObject3D).input_ray_pickable = false
 		var top_y := _building_top_y(building)
-		global_position = building.global_position + Vector3(0.0, top_y + MENU_HEIGHT_OFFSET, 0.0)
-		_create_sphere("upgrade", Vector3(-SPHERE_SPACING, 0.0, 0.0), Color(0.2, 1.0, 0.3))
-		_create_sphere("sell", Vector3(0.0, 0.0, 0.0), Color(1.0, 0.25, 0.25))
-		_create_sphere("move", Vector3(SPHERE_SPACING, 0.0, 0.0), Color(0.3, 0.6, 1.0))
+		global_position = building.global_position + Vector3(0.0, top_y, 0.0)
+		if _building_can_upgrade(building):
+			var upgrade_cost := _get_upgrade_cost(building)
+			_create_button("upgrade", Vector3(0.0, VERTICAL_GAP, 0.0),
+				"UPGRADE\n-$%d" % upgrade_cost, UPGRADE_COLOR)
+		var sell_refund := _get_sell_refund(building)
+		_create_button("sell", Vector3(0.0, -VERTICAL_GAP, 0.0),
+			"SELL\n+$%d" % sell_refund, SELL_COLOR)
+
+	func _exit_tree() -> void:
+		# Re-enable mouse picking on the tower so the next click can reopen the menu.
+		if is_instance_valid(_building) and _building is CollisionObject3D:
+			(_building as CollisionObject3D).input_ray_pickable = _tower_was_pickable
+
+	func _unhandled_input(event: InputEvent) -> void:
+		# Single source of truth for clicks: if a button is hovered, commit its action; otherwise
+		# treat the click as a dismiss. This decouples the click from physics-pick order so hover
+		# highlight and click action can never disagree.
+		if not (event is InputEventMouseButton): return
+		if not event.pressed or event.button_index != MOUSE_BUTTON_LEFT: return
+		if _hovered_action != "":
+			action_selected.emit(_hovered_action)
+		else:
+			queue_free()
+		get_viewport().set_input_as_handled()
+
+	func _building_can_upgrade(building: Node3D) -> bool:
+		# Only draw the upgrade button when the tower reports another tier is available.
+		return building.has_method("can_upgrade") and building.can_upgrade()
 
 	func _building_top_y(building: Node3D) -> float:
-		# Height of the building's collision box — used to place menu above its roof
+		# Height of the building's collision box — used to place menu near its roof
 		if building.has_method("_get_collision_box_size"):
 			var size: Vector3 = building._get_collision_box_size()
 			return size.y
 		return 4.0
 
-	func _create_sphere(action: String, offset: Vector3, color: Color) -> void:
-		# Build one clickable action sphere: Area3D + collision + mesh + label, wired to action_selected.
+	func _get_upgrade_cost(building: Node3D) -> int:
+		# Per-building upgrade cost — falls back to 0 if the subclass forgot to override
+		if building.has_method("get_upgrade_cost"):
+			return building.get_upgrade_cost()
+		return 0
+
+	func _get_sell_refund(building: Node3D) -> int:
+		# Half-price refund matches Building.destroy() behaviour
+		if building.has_method("get_cost"):
+			return building.get_cost() / 2
+		return 0
+
+	func _create_button(action: String, offset: Vector3, text: String, color: Color) -> void:
+		# Build one clickable Label3D: Area3D + sphere collision + billboarded text, wired to action_selected.
 		var area := Area3D.new()
 		area.position = offset
 		area.collision_layer = 1  # same layer as ground/towers so mouse raycasts pick it up
@@ -105,39 +111,31 @@ class BuildingMenu3D extends Node3D:
 
 		var col := CollisionShape3D.new()
 		var shape := SphereShape3D.new()
-		shape.radius = SPHERE_RADIUS
+		shape.radius = CLICK_RADIUS
 		col.shape = shape
 		area.add_child(col)
 
-		var mesh_inst := MeshInstance3D.new()
-		var mesh := SphereMesh.new()
-		mesh.radius = SPHERE_RADIUS
-		mesh.height = SPHERE_RADIUS * 2.0
-		mesh_inst.mesh = mesh
-		var mat := StandardMaterial3D.new()
-		mat.albedo_color = color
-		mat.emission_enabled = true
-		mat.emission = color
-		mat.emission_energy_multiplier = 0.6
-		mesh_inst.material_override = mat
-		area.add_child(mesh_inst)
-
-		# Always-facing label so the player can read the action
 		var label := Label3D.new()
-		label.text = action.capitalize()
-		label.position = Vector3(0.0, SPHERE_RADIUS + 0.6, 0.0)
-		label.pixel_size = 0.012
-		label.font_size = 48
-		label.outline_size = 8
-		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-		label.no_depth_test = true
+		label.text = text
+		label.pixel_size = 0.015
+		label.font_size = 64
+		label.outline_size = 12
+		label.modulate = color
+		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED  # always faces the camera
+		label.no_depth_test = true  # draw over towers so it never gets occluded
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		area.add_child(label)
 
-		area.input_event.connect(func(_cam, event, _pos, _norm, _idx):
-			if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-				action_selected.emit(action)
-				get_viewport().set_input_as_handled()
-		)
+		# Yellow hover feedback + hover-state tracking. _unhandled_input on the menu reads
+		# _hovered_action to decide which action a click commits, so visual hover and click
+		# are driven by the same signal and cannot diverge.
+		area.mouse_entered.connect(func():
+			_hovered_action = action
+			label.modulate = HOVER_COLOR)
+		area.mouse_exited.connect(func():
+			if _hovered_action == action:
+				_hovered_action = ""
+			label.modulate = color)
 
 
 # --- Main GameBoard Manager (Node3D) ---
@@ -221,9 +219,7 @@ func initialize(player: CharacterBody3D, objective: Area3D, terrain: StaticBody3
 
 	if not _ui.is_node_ready(): await _ui.ready
 
-	objective.hp_changed.connect(_ui.update_hp)
-	_ui.update_hp(objective.current_hp, objective.max_hp)
-
+	# Objective HP is shown in 3D above defence_objective itself — no 2D mirror needed here.
 	# Route money changes to both the 2D overlay and the 3D shelf label
 	player.money_changed.connect(_ui.update_money)
 	player.money_changed.connect(_update_shelf_money)
@@ -241,12 +237,6 @@ func _update_shelf_money(amount: float) -> void:
 	if _shelf_money_label:
 		_shelf_money_label.text = "$%d" % int(amount)
 
-func update_wave(current: int, total: int) -> void:
-	_ui.update_wave(current, total)
-
-func start_wave_countdown(next_wave: int, total: int, delay: float) -> void:
-	_ui.start_wave_countdown(next_wave, total, delay)
-
 func show_building_menu(building: Node3D) -> void:
 	# Close any prior menu, then spawn the 3D sphere menu anchored to this building
 	hide_building_menu()
@@ -263,18 +253,27 @@ func hide_building_menu() -> void:
 	_menu = null
 
 func _on_menu_action(action: String, building: Node3D) -> void:
-	# Dispatch the clicked sphere to the building's matching handler, then close the menu.
-	# Close BEFORE sell/move because those free the building and would invalidate the menu's anchor.
+	# Dispatch the clicked label to the building's matching handler, then close the menu.
+	# Close BEFORE sell because destroy() frees the building and would invalidate the menu's anchor.
 	hide_building_menu()
 	if not is_instance_valid(building):
 		return
 	match action:
 		"upgrade":
-			if building.has_method("upgrade"): building.upgrade()
+			_try_upgrade(building)
 		"sell":
 			if building.has_method("destroy"): building.destroy()
-		"move":
-			if building.has_method("move"): building.move()
+
+func _try_upgrade(building: Node3D) -> void:
+	# Deduct the upgrade cost from the player before mutating the tower; no-op if unaffordable.
+	assert(building.has_method("get_upgrade_cost"), "Tower must expose get_upgrade_cost()")
+	assert(building.has_method("upgrade"), "Tower must implement upgrade()")
+	var cost: int = building.get_upgrade_cost()
+	var player := get_tree().get_first_node_in_group("player")
+	if player == null or player.money < cost:
+		return
+	player.money -= cost
+	building.upgrade()
 
 func show_game_over() -> void:
 	var canvas = CanvasLayer.new()

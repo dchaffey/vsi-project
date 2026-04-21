@@ -21,12 +21,17 @@ var _start_xr: Node = null    # reference to StartXR node for runtime passthroug
 
 ## Wave system state
 var _waves: Array = []         # parsed wave defs: [{enemy_count, spawn_rate}, ...]
-var _current_wave: int = 0     # index into _waves
-var _alive_enemies: int = 0    # enemies still alive this wave — hits 0 → queue next wave
+var _current_wave: int = -1    # index of wave currently running; -1 before the first wave starts
+var _next_wave_index: int = 0  # index the 3D next-wave button will start on click
+var _alive_enemies: int = 0    # enemies still alive this wave — hits 0 → expose next-wave button
 var _spawned_this_wave: int = 0  # how many have been spawned so far this wave
 var _spawn_timer: Timer        # fires at wave's spawn rate
-var _wave_delay_timer: Timer   # cooldown before next wave starts
-var wave_delay: float = 8.0    # seconds between waves
+
+## 3D wave HUD state
+var _wave_hud: Node3D          # container anchoring both wave label and next-wave button above the field
+var _wave_label_3d: Label3D    # static-rotation readout "Wave X / Y"
+var _next_wave_button: Area3D  # clickable region with a Label3D child — player-initiated wave advance
+var _next_wave_label: Label3D  # text on the next-wave button, e.g. "START WAVE 3"
 
 func _ready() -> void:
 	# Immediately disable XR to avoid black screen on desktop fallback.
@@ -70,7 +75,7 @@ func _ready() -> void:
 		print("VR manually disabled via ENABLE_VR. Desktop mode active.")
 
 	# Boost global gravity programmatically (optional but effective)
-	ProjectSettings.set_setting("physics/3d/default_gravity", 19.6)
+	ProjectSettings.set_setting("physics/3d/default_gravity", 50.6)
 	
 	spawn_environment()
 	spawn_sunlight()
@@ -84,7 +89,8 @@ func _ready() -> void:
 	await spawn_game_board()
 	_load_waves("res://assets/levels/lvl1.csv")
 	_init_wave_timers()
-	_start_wave(0)
+	_spawn_wave_hud()
+	_show_next_wave_button()  # initial state — player must click to start wave 1
 	# spawn_flow_debug()
 
 
@@ -211,31 +217,106 @@ func _load_waves(path: String) -> void:
 	print("Loaded %d waves from %s" % [_waves.size(), path])
 
 
-## Create the two timers used by the wave system.
+## Create the spawn timer used by the wave system.
 func _init_wave_timers() -> void:
 	_spawn_timer = Timer.new()
 	_spawn_timer.one_shot = false
 	_spawn_timer.timeout.connect(_on_spawn_tick)
 	add_child(_spawn_timer)
 
-	_wave_delay_timer = Timer.new()
-	_wave_delay_timer.one_shot = true
-	_wave_delay_timer.wait_time = wave_delay
-	_wave_delay_timer.timeout.connect(_on_wave_delay_done)
-	add_child(_wave_delay_timer)
+
+## Build the 3D wave HUD (wave readout + next-wave button) hovering above the field.
+func _spawn_wave_hud() -> void:
+	assert(terrain != null, "Terrain must be built before the wave HUD is spawned.")
+	var hud_y: float = terrain.max_height + 30.0
+	_wave_hud = Node3D.new()
+	_wave_hud.position = Vector3(0.0, hud_y, 0.0)
+	add_child(_wave_hud)
+	_build_wave_label_3d()
+	_build_next_wave_button()
+
+
+func _build_wave_label_3d() -> void:
+	# Static-rotation wave readout — player can see progress without moving the camera.
+	_wave_label_3d = Label3D.new()
+	_wave_label_3d.text = "Wave 0 / %d" % _waves.size()
+	_wave_label_3d.position = Vector3(0.0, 6.0, 0.0)
+	_wave_label_3d.pixel_size = 0.05
+	_wave_label_3d.font_size = 96
+	_wave_label_3d.outline_size = 16
+	_wave_label_3d.modulate = Color(1.0, 1.0, 0.5)
+	_wave_label_3d.no_depth_test = true
+	_wave_label_3d.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_wave_hud.add_child(_wave_label_3d)
+
+
+const _NEXT_WAVE_BASE_COLOR := Color(0.25, 1.0, 0.4)  # resting color — matches tower upgrade green
+const _NEXT_WAVE_HOVER_COLOR := Color(1.0, 0.95, 0.2)  # yellow — click affordance on mouse enter
+
+func _build_next_wave_button() -> void:
+	# Clickable Area3D + Label3D pair that gates wave progression on player input.
+	_next_wave_button = Area3D.new()
+	_next_wave_button.collision_layer = 1 << 20  # off the ground layer so placement raycasts ignore it
+	_next_wave_button.collision_mask = 0
+	_next_wave_button.input_ray_pickable = true
+	_wave_hud.add_child(_next_wave_button)
+
+	var col := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = Vector3(24.0, 6.0, 6.0)  # generous hit area so the button is easy to click
+	col.shape = shape
+	_next_wave_button.add_child(col)
+
+	_next_wave_label = Label3D.new()
+	_next_wave_label.pixel_size = 0.05
+	_next_wave_label.font_size = 96
+	_next_wave_label.outline_size = 16
+	_next_wave_label.modulate = _NEXT_WAVE_BASE_COLOR
+	_next_wave_label.no_depth_test = true
+	_next_wave_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_next_wave_button.add_child(_next_wave_label)
+
+	# Yellow hover feedback mirrors the tower menu buttons.
+	_next_wave_button.mouse_entered.connect(func(): _next_wave_label.modulate = _NEXT_WAVE_HOVER_COLOR)
+	_next_wave_button.mouse_exited.connect(func(): _next_wave_label.modulate = _NEXT_WAVE_BASE_COLOR)
+
+	_next_wave_button.input_event.connect(_on_next_wave_input)
+
+
+func _on_next_wave_input(_cam: Node, event: InputEvent, _pos: Vector3, _norm: Vector3, _idx: int) -> void:
+	# Left-click on the 3D button consumes the event and advances to the pending wave.
+	if not (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT):
+		return
+	if _next_wave_index >= _waves.size():
+		return
+	_hide_next_wave_button()
+	_start_wave(_next_wave_index)
+	get_viewport().set_input_as_handled()
+
+
+func _show_next_wave_button() -> void:
+	# Reveal the button with text naming the wave that will start on click.
+	assert(_next_wave_index < _waves.size(), "No more waves — should not show button")
+	_next_wave_label.text = "START WAVE %d" % (_next_wave_index + 1)
+	_next_wave_button.visible = true
+
+
+func _hide_next_wave_button() -> void:
+	_next_wave_button.visible = false
 
 
 ## Begin spawning enemies for the given wave index.
 func _start_wave(index: int) -> void:
 	assert(index < _waves.size(), "Wave index out of bounds")
 	_current_wave = index
+	_next_wave_index = index + 1
 	_spawned_this_wave = 0
 	_alive_enemies = _waves[index].enemy_count  # pre-set to full wave count; decremented on each death
 	var wave = _waves[index]
 	_spawn_timer.wait_time = 1.0 / wave.spawn_rate
 	_spawn_timer.start()
-	if game_board:
-		game_board.update_wave(index + 1, _waves.size())
+	if _wave_label_3d:
+		_wave_label_3d.text = "Wave %d / %d" % [index + 1, _waves.size()]
 	print("Wave %d: %d enemies at %.1f/sec" % [index + 1, wave.enemy_count, wave.spawn_rate])
 
 
@@ -249,28 +330,21 @@ func _on_spawn_tick() -> void:
 		_spawn_timer.stop()
 
 
-## Called when any wave enemy dies. Starts next wave when all are gone.
+## Called when any wave enemy dies. Exposes the next-wave button when the wave is cleared.
 func _on_enemy_died() -> void:
 	assert(_alive_enemies > 0, "alive_enemies went negative — died signal fired too many times")
 	_alive_enemies -= 1
 	if _alive_enemies == 0:
-		if _current_wave + 1 < _waves.size():
-			_wave_delay_timer.start()
-			if game_board:
-				game_board.start_wave_countdown(_current_wave + 2, _waves.size(), wave_delay)
-			print("Wave %d cleared. Next wave in %.0f seconds." % [_current_wave + 1, wave_delay])
+		if _next_wave_index < _waves.size():
+			_show_next_wave_button()
+			print("Wave %d cleared. Press the 3D button to start wave %d." % [_current_wave + 1, _next_wave_index + 1])
 		else:
 			print("All waves complete.")
 
 
-## Start the next wave after the inter-wave delay.
-func _on_wave_delay_done() -> void:
-	_start_wave(_current_wave + 1)
-
-
 func _on_game_over() -> void:
 	_spawn_timer.stop()
-	_wave_delay_timer.stop()
+	_hide_next_wave_button()
 
 	if player:
 		player._is_locked = true

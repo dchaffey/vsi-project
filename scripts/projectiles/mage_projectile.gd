@@ -6,7 +6,7 @@ var control1: Vector3
 var control2_offset: Vector3
 var duration: float = 1.2
 var elapsed_time: float = 0.0
-var impact_force: float = 100.0  # impact velocity applied to enemies on hit
+var impact_force: float = 30.0  # impact velocity applied to enemies on hit
 
 
 func setup(p_start: Vector3, p_target: Node3D) -> void:

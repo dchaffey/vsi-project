@@ -7,8 +7,14 @@ var projectiles_per_shot: int = 1
 var _tower_model: Node3D  # reference to the base tower model
 var _query_shape := SphereShape3D.new()
 
+const MAX_TIER: int = 1  # highest reachable upgrade index for the archer — caps at double-shot / fast-fire
+var _tier: int = 0  # current archer upgrade index — 0 = base, 1 = final
+
 static func get_cost() -> int:
 	return 20  # purchase cost
+
+static func get_upgrade_cost() -> int:
+	return 30  # currency required to unlock the upgraded mage model + faster fire rate
 
 func _get_collision_box_size() -> Vector3:
 	# Tall box matching the archer tower model — used for physics and mouse picking
@@ -30,18 +36,23 @@ func place(p_position: Vector3, p_rotation: Vector3 = Vector3.ZERO) -> void:
 	global_position = p_position
 	rotation = p_rotation
 
-func upgrade() -> void:
-	# Remove base tower model and spawn mage model on upgrade
-	if is_instance_valid(_tower_model):
-		_tower_model.queue_free()
+func can_upgrade() -> bool:
+	# Archer upgrade is available until tier hits the cap — drives the 3D menu button visibility
+	return _tier < MAX_TIER
 
-	var mage_scene: PackedScene = load("res://assets/Mage2.glb")
-	var mage_instance := mage_scene.instantiate()
-	mage_instance.position = Vector3(0, 0, 0)
-	add_child(mage_instance)
-	# projectiles_per_shot = 2
-	shoot_interval = 0.5
+func upgrade() -> void:
+	assert(can_upgrade(), "Archer tower already at max tier")
+	_tier += 1
+	shoot_interval = 0.4
+	projectiles_per_shot = 2
 	_query_shape.radius = range_radius
+
+	# Swap to upgraded model
+	_tower_model.queue_free()
+	var upgraded_scene: PackedScene = load("res://assets/Spear Tower Upgrade .glb")
+	_tower_model = upgraded_scene.instantiate()
+	_tower_model.position = Vector3(0, 4, 0)
+	add_child(_tower_model)
 
 func _physics_process(delta: float) -> void:
 	shoot_timer += delta

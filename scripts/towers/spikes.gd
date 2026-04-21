@@ -5,8 +5,14 @@ var _enemies_in_range: Dictionary = {}  # tracks enemies in damage zone and thei
 var _collision_radius: float = 2.0  # matches building collision shape
 var _query_shape := CylinderShape3D.new()
 
+const MAX_TIER: int = 1  # upgrade cap — final tier nearly doubles contact DPS
+var _tier: int = 0  # current spikes upgrade index
+
 static func get_cost() -> int:
 	return 20  # purchase cost
+
+static func get_upgrade_cost() -> int:
+	return 15  # currency required for the spikes upgrade tier
 
 func _get_collision_box_size() -> Vector3:
 	# Box matching barracks footprint — width/depth follow the damage radius
@@ -61,6 +67,12 @@ func place(p_position: Vector3, p_rotation: Vector3 = Vector3.ZERO) -> void:
 	global_position = p_position
 	rotation = p_rotation
 
+func can_upgrade() -> bool:
+	# Spikes upgrade is available until the tier cap is reached
+	return _tier < MAX_TIER
+
 func upgrade() -> void:
-	# Spikes upgrade placeholder
-	pass
+	# Raise contact DPS — keeps the barracks footprint but makes the trap noticeably deadlier.
+	assert(can_upgrade(), "Spikes already at max tier")
+	_tier += 1
+	_damage_per_second = 180.0
