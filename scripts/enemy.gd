@@ -1,74 +1,121 @@
-extends RigidBody3D
+extends CharacterBody3D
+
+## Enemy that walks along the terrain flow field and ragdolls when hit hard.
+## Uses kinematic movement (move_and_slide) so it cannot tunnel into terrain.
 
 enum State { PATHING, RAGDOLL, RECOVERING, DEAD }
 
-## Emitted when the enemy dies.
+## Emitted when the enemy dies — wave manager / spawner listens for rewards.
 signal died(max_hp: float)
 
-## Reference to the terrain node (set by the spawner).
+## Terrain reference — provides flow field and height queries. Set by spawner.
 var terrain: StaticBody3D
-## Reference to the defence objective (set by the spawner).
+## Defence objective — enemies die/respawn when they reach it. Set by spawner.
 var defence_objective: Area3D
 
-## Movement speed in world units per second.
-var move_speed: float = 20.0
-var jump_strength = 20.0
+## Horizontal movement speed in world units per second.
+var move_speed: float = 12.0
+## Vertical jump kick used when pathing gets stuck against small ledges.
+var jump_strength: float = 10.0
 
-## HP and impact damage.
+## Current and maximum hit points.
 var hp: float = 30.0
 var max_hp: float = 100.0
-var impact_damage_threshold: float = 30.0
-var impact_damage_scale: float = 2.0
 
-## Cached start positions (world space).
+## Cached road-start positions for respawn teleportation.
 var _start_positions: Array = []
-## RNG for picking a random start on respawn.
+## Per-enemy RNG — randomizes wander, giant variant, respawn choice, ragdoll spin.
 var _rng := RandomNumberGenerator.new()
 
-var should_respawn: bool = false  # if false, queue_free() on death instead of respawning
-var _state: State = State.PATHING
-var _settle_timer: float = 0.0
-var _dead_timer: float = 0.0
-var _prev_velocity := Vector3.ZERO
-var _material: StandardMaterial3D
-var _pending_impulse := Vector3.ZERO  # tracks impulses applied this frame for ragdoll threshold check
-var _impulse_ragdoll_threshold: float = 20.0  # minimum impulse magnitude to trigger ragdoll
-var _flash_timer: float = 0.0  # seconds remaining in damage flash — overrides health color when > 0
+## If true, reaching the goal teleports the enemy back to start instead of killing it.
+var should_respawn: bool = false
 
+## Active state in the pathing/ragdoll/recovering/dead machine.
+var _state: State = State.PATHING
+## Seconds the body has been considered "settled" while in RAGDOLL — gates transition to RECOVERING.
+var _settle_timer: float = 0.0
+## Seconds since entering DEAD — gates queue_free / respawn.
+var _dead_timer: float = 0.0
+## Seconds spent in RAGDOLL state — forces recovery after timeout to prevent infinite drifting.
+var _ragdoll_timer: float = 0.0
+## Seconds spent in RECOVERING state — forces PATHING after timeout to prevent infinite standing up.
+var _recovering_timer: float = 0.0
+
+## Mesh material — used by spawner to tint on HP change / damage flash. Assigned externally.
+var material: StandardMaterial3D
+## Seconds remaining on damage flash — while > 0, the material stays red.
+var _flash_timer: float = 0.0
+
+## Full-HP and near-death albedo colors for the damage tint gradient.
 const _COLOR_FULL_HP := Color(0.85, 0.85, 0.85)
 const _COLOR_LOW_HP := Color(1.0, 0.4, 0.0)
-## Wander: a slowly-drifting angular offset applied to the flow direction.
+
+## Global gravity magnitude — read from ProjectSettings to match world.gd's setting.
+var GRAVITY: float = ProjectSettings.get_setting("physics/3d/default_gravity")
+## Maximum seconds an enemy can remain in RAGDOLL state before forced recovery — prevents infinite drifting.
+const MAX_RAGDOLL_TIME := 4.0
+## Maximum seconds an enemy can remain in RECOVERING state before forced PATHING — prevents infinite standing up.
+const MAX_RECOVERING_TIME := 3.0
+
+## Impulse magnitude (from apply_impulse) that tips the enemy into RAGDOLL.
+var _impulse_ragdoll_threshold: float = 20.0
+## Accumulated-velocity threshold that tips RAGDOLL from apply_force or from fast external velocity changes.
+var _velocity_ragdoll_threshold: float = 40.0
+
+## Manually-integrated angular velocity driving visual tumble while ragdolled.
+var _angular_velocity: Vector3 = Vector3.ZERO
+
+## Wander: slowly-drifting yaw offset applied to the flow direction so the crowd isn't in a straight line.
 var _wander_angle: float = 0.0
 var _wander_target: float = 0.0
 var _wander_timer: float = 0.0
-## Stuck detection: tracks time spent with near-zero horizontal speed while pathing.
+
+## Stuck detection: seconds spent with near-zero horizontal speed while pathing on ground.
 var _stuck_timer: float = 0.0
 ## Cooldown after a jump to prevent rapid re-jumping.
 var _jump_cooldown: float = 0.0
 
 
+## Wire up terrain queries and the defence-objective signal. Called once on add_child.
 func _ready() -> void:
 	_rng.randomize()
-	_lock_angular_axes()
-	assert(terrain != null)
-	assert(defence_objective != null)
+	assert(terrain != null, "enemy.terrain must be set before add_child")
+	assert(defence_objective != null, "enemy.defence_objective must be set before add_child")
 	_start_positions = terrain.get_start_world_positions()
 	defence_objective.enemy_entered.connect(_on_defence_objective_entered)
 
-	# 10% chance to spawn as a giant variant
+	# Fetch global gravity setting to match world.gd
+	GRAVITY = ProjectSettings.get_setting("physics/3d/default_gravity")
+
+	# 10% chance to spawn as a giant variant — double size, double HP.
 	if _rng.randf() < 0.1:
 		scale *= 2.0
 		max_hp *= 2.0
 		hp = max_hp
 
 
-func receive_impact_impulse(direction: Vector3, magnitude: float) -> void:
-	# accumulate impulse for this frame — checked in _process_pathing() to decide ragdoll transition
-	_pending_impulse += direction.normalized() * magnitude
+## One-shot velocity kick. Used by explosions, projectile impacts, per-frame wind/suck calls.
+## If `magnitude` meets the ragdoll threshold, flips the enemy into RAGDOLL.
+func apply_impulse(direction: Vector3, magnitude: float) -> void:
+	if _state == State.DEAD:
+		return
+	velocity += direction.normalized() * magnitude
+	if magnitude >= _impulse_ragdoll_threshold and _state == State.PATHING:
+		_enter_ragdoll()
 
 
+## Frame-rate-independent continuous force. Accumulated velocity can still tip the enemy into RAGDOLL.
+## Caller passes delta — magnitude is treated as units/sec², so integration is `v += dir * mag * delta`.
+func apply_force(direction: Vector3, magnitude: float, delta: float) -> void:
+	if _state == State.DEAD:
+		return
+	velocity += direction.normalized() * magnitude * delta
+	if velocity.length() > _velocity_ragdoll_threshold and _state == State.PATHING:
+		_enter_ragdoll()
+
+
+## Direct HP damage — called by spikes, arrow projectile, etc.
 func apply_dmg(amount: float) -> void:
-	# direct damage from collisions, explosions, etc.
 	if _state == State.DEAD:
 		_flash_red()
 		return
@@ -79,20 +126,19 @@ func apply_dmg(amount: float) -> void:
 		_flash_red()
 
 
+## Main physics tick — dispatches to the current state handler then commits movement.
 func _physics_process(delta: float) -> void:
 	assert(terrain != null)
 
-	var pos := global_position
-
-	# --- Out of bounds detection ---
-	if pos.y < -30.0:
+	# Safety hatch — if the enemy somehow falls out of the world, despawn it.
+	if global_position.y < -30.0:
 		_enter_dead()
 		queue_free()
 		return
 
 	match _state:
 		State.PATHING:
-			_process_pathing(delta, pos)
+			_process_pathing(delta)
 		State.RAGDOLL:
 			_process_ragdoll(delta)
 		State.RECOVERING:
@@ -100,140 +146,129 @@ func _physics_process(delta: float) -> void:
 		State.DEAD:
 			_process_dead(delta)
 
-	# --- Impact damage detection ---
-	var velocity_delta := (linear_velocity - _prev_velocity).length()
-	if velocity_delta > impact_damage_threshold:
-		var damage := (velocity_delta - impact_damage_threshold) * impact_damage_scale
-		if _state == State.DEAD:
-			_flash_red()
-		else:
-			hp -= damage
-			if hp <= 0.0:
-				_enter_dead()
-			else:
-				_flash_red()
+	move_and_slide()
 
-	# --- Decay damage flash ---
+	# Decay damage-flash tint back to the health-based color.
 	if _flash_timer > 0.0:
-		_flash_timer -= get_physics_process_delta_time()
+		_flash_timer -= delta
 		if _flash_timer <= 0.0:
 			_update_color()
-	_prev_velocity = linear_velocity
-	_pending_impulse = Vector3.ZERO  # clear impulse for next frame
+	
+	# Decay damage-flash tint back to the health-based color.
+	if _flash_timer > 0.0:
+		_flash_timer -= delta
+		if _flash_timer <= 0.0:
+			_update_color()
 
-func _process_pathing(delta: float, pos: Vector3) -> void:
-	# --- Check pending impulse and transition to RAGDOLL if strong enough ---
-	var impulse_len := _pending_impulse.length()
-	if impulse_len > 0.0:
-		# Apply impulse to velocity — weak hits just push the enemy around
-		linear_velocity += _pending_impulse
-		# Strong impulse triggers ragdoll
-		if impulse_len >= _impulse_ragdoll_threshold:
-			# print("[ENEMY] ", name, " → RAGDOLL from impulse=", snapped(impulse_len, 0.1))
-			_state = State.RAGDOLL
-			_settle_timer = 0.0
-			_unlock_angular_axes()
-			return
 
-	# --- Transition to RAGDOLL on strong velocity (re-hit during ragdoll recovery) ---
-	# Must check BEFORE velocity correction so external impulses (suck, explosion)
-	# are not overwritten by the lerp before the threshold is evaluated.
-	var _vel_len := linear_velocity.length()
-	# if _vel_len > move_speed * 1.5:
-		# print("[ENEMY] ", name, " vel=", snapped(_vel_len, 0.1), " threshold=", move_speed * 2.0)
-	if _vel_len > move_speed * 2.0:
-		# print("[ENEMY] ", name, " → RAGDOLL at vel=", snapped(_vel_len, 0.1))
-		_state = State.RAGDOLL
-		_settle_timer = 0.0
-		_unlock_angular_axes()
-		return
+## PATHING: flow-field steering + gravity + stuck-detection jump.
+func _process_pathing(delta: float) -> void:
+	velocity.y -= GRAVITY * delta
 
-	# --- Wander: smoothly drift a random angular offset ---
+	# Wander drift — randomized yaw offset with slow lerp toward a new target.
 	_wander_timer -= delta
 	if _wander_timer <= 0.0:
-		_wander_target = _rng.randf_range(-0.4, 0.4)  # ~±23 degrees max
+		_wander_target = _rng.randf_range(-0.4, 0.4)
 		_wander_timer = _rng.randf_range(0.8, 2.0)
 	_wander_angle = lerpf(_wander_angle, _wander_target, clampf(delta * 3.0, 0.0, 1.0))
 
-	# --- Flow field movement ---
-	var flow: Vector2 = terrain.get_flow_direction(pos.x, pos.z)
+	# Flow-field steering — lerp horizontal velocity toward the desired direction.
+	var flow: Vector2 = terrain.get_flow_direction(global_position.x, global_position.z)
 	if flow != Vector2.ZERO:
-		var rotated_flow := flow.rotated(_wander_angle)
-		var desired_vel := Vector3(rotated_flow.x, 0.0, rotated_flow.y).normalized() * move_speed
-		var current_vel := linear_velocity
-		var corrected := Vector3(
-			lerpf(current_vel.x, desired_vel.x, clampf(delta * 5.0, 0.0, 1.0)),
-			current_vel.y,
-			lerpf(current_vel.z, desired_vel.z, clampf(delta * 5.0, 0.0, 1.0)),
-		)
-		linear_velocity = corrected
+		var rotated := flow.rotated(_wander_angle)
+		var desired := Vector3(rotated.x, 0.0, rotated.y).normalized() * move_speed
+		velocity.x = lerpf(velocity.x, desired.x, clampf(delta * 5.0, 0.0, 1.0))
+		velocity.z = lerpf(velocity.z, desired.z, clampf(delta * 5.0, 0.0, 1.0))
 
-	# --- Stuck detection: jump if horizontal speed is too low ---
+	# Stuck detection — hop if we've been blocked on the ground for a beat.
 	_jump_cooldown -= delta
-	var horiz_speed := Vector2(linear_velocity.x, linear_velocity.z).length()
-	if horiz_speed < move_speed * 0.2:
+	var horiz: float = Vector2(velocity.x, velocity.z).length()
+	if horiz < move_speed * 0.2 and is_on_floor():
 		_stuck_timer += delta
 		if _stuck_timer > 0.5 and _jump_cooldown <= 0.0:
-			linear_velocity.y = jump_strength
+			velocity.y = jump_strength
 			_stuck_timer = 0.0
 			_jump_cooldown = 1.0
 	else:
 		_stuck_timer = 0.0
 
 
+## RAGDOLL: gravity + horizontal damping + manual angular integration for visual tumble.
 func _process_ragdoll(delta: float) -> void:
-	# Pure physics — no steering or height correction.
-	# Transition to RECOVERING once the body has settled.
-	if linear_velocity.length() < 2.0 and angular_velocity.length() < 1.0:
+	velocity.y -= GRAVITY * delta
+
+	# Damp horizontal velocity so the body comes to rest.
+	velocity.x = lerpf(velocity.x, 0.0, clampf(delta * 1.0, 0.0, 1.0))
+	velocity.z = lerpf(velocity.z, 0.0, clampf(delta * 1.0, 0.0, 1.0))
+
+	# Integrate the fake angular velocity and damp it.
+	if _angular_velocity.length_squared() > 0.0001:
+		var axis := _angular_velocity.normalized()
+		var angle := _angular_velocity.length() * delta
+		rotate(axis, angle)
+		_angular_velocity = _angular_velocity.lerp(Vector3.ZERO, clampf(delta * 1.5, 0.0, 1.0))
+
+	# Increment ragdoll timer and force recovery after maximum time to prevent infinite drifting.
+	_ragdoll_timer += delta
+	if _ragdoll_timer >= MAX_RAGDOLL_TIME:
+		_state = State.RECOVERING
+		_angular_velocity = Vector3.ZERO
+		_recovering_timer = 0.0
+		return
+
+	# Settle check — on ground, low linear + angular speed, for 0.3s in a row.
+	var settled: bool = is_on_floor() \
+			and velocity.length() < 2.0 \
+			and _angular_velocity.length() < 0.5
+	if settled:
 		_settle_timer += delta
 		if _settle_timer >= 0.3:
 			_state = State.RECOVERING
-			_lock_angular_axes()
+			_recovering_timer = 0.0
 	else:
 		_settle_timer = 0.0
 
 
+## RECOVERING: slerp quaternion back to upright, then resume PATHING.
 func _process_recovering(delta: float) -> void:
-	# Slerp toward upright, preserving Y rotation.
-	var current_quat := quaternion
-	var current_euler := current_quat.get_euler()
-	var target_quat := Quaternion.from_euler(Vector3(0.0, current_euler.y, 0.0))
-	quaternion = current_quat.slerp(target_quat, clampf(delta * 5.0, 0.0, 1.0))
-
-	# Transition to PATHING when close enough to upright.
-	if current_quat.dot(target_quat) > 0.99:
+	velocity.y -= GRAVITY * delta
+	
+	# Damp horizontal velocity so enemy doesn't drift while recovering
+	velocity.x = lerpf(velocity.x, 0.0, clampf(delta * 2.0, 0.0, 1.0))
+	velocity.z = lerpf(velocity.z, 0.0, clampf(delta * 2.0, 0.0, 1.0))
+	
+	# Increment recovery timer and force PATHING after maximum time
+	_recovering_timer += delta
+	if _recovering_timer >= MAX_RECOVERING_TIME:
 		_state = State.PATHING
-
-	# Re-enter ragdoll if hit again during recovery.
-	if linear_velocity.length() > move_speed * 2.0:
-		_state = State.RAGDOLL
-		_settle_timer = 0.0
-		_unlock_angular_axes()
-
-
-func _lock_angular_axes() -> void:
-	axis_lock_angular_x = true
-	axis_lock_angular_z = true
-
-
-func _unlock_angular_axes() -> void:
-	axis_lock_angular_x = false
-	axis_lock_angular_z = false
-
-
-func _enter_dead() -> void:
-	if _state == State.DEAD:
+		_angular_velocity = Vector3.ZERO
+		_ragdoll_timer = 0.0
+		if has_meta("recovering_target_quat"):
+			remove_meta("recovering_target_quat")
 		return
-	hp = 0.0
-	_dead_timer = 0.0
-	_state = State.DEAD
-	_unlock_angular_axes()
-	if _material:
-		_material.albedo_color = Color(1.0, 0.0, 0.0)  # turn bright red on death
-	died.emit(max_hp)
+
+	# Store target quaternion when first entering RECOVERING state
+	if not has_meta("recovering_target_quat"):
+		# Target is upright (no X/Z rotation), preserve current Y rotation
+		var current_euler := quaternion.get_euler()
+		var target_quat := Quaternion.from_euler(Vector3(0.0, current_euler.y, 0.0))
+		set_meta("recovering_target_quat", target_quat)
+	
+	var target_quat: Quaternion = get_meta("recovering_target_quat")
+	quaternion = quaternion.slerp(target_quat, clampf(delta * 5.0, 0.0, 1.0))
+
+	# Check if we're close enough to the target orientation
+	if quaternion.dot(target_quat) > 0.99:
+		_state = State.PATHING
+		_angular_velocity = Vector3.ZERO
+		_ragdoll_timer = 0.0
+		_recovering_timer = 0.0
+		remove_meta("recovering_target_quat")
 
 
+## DEAD: let gravity pull the corpse down, then despawn/respawn after 1s.
 func _process_dead(delta: float) -> void:
+	velocity.y -= GRAVITY * delta
 	_dead_timer += delta
 	if _dead_timer >= 1.0:
 		if should_respawn:
@@ -242,55 +277,91 @@ func _process_dead(delta: float) -> void:
 			queue_free()
 
 
+## Transition into RAGDOLL — seeds a random tumble proportional to current speed.
+func _enter_ragdoll() -> void:
+	if _state == State.DEAD or _state == State.RAGDOLL:
+		return
+	_state = State.RAGDOLL
+	_settle_timer = 0.0
+	_ragdoll_timer = 0.0
+	
+	# Clear any recovery metadata
+	if has_meta("recovering_target_quat"):
+		remove_meta("recovering_target_quat")
+	
+	var spin_mag: float = clampf(velocity.length() * 0.2, 2.0, 8.0)
+	_angular_velocity = Vector3(
+		_rng.randf_range(-1.0, 1.0),
+		_rng.randf_range(-1.0, 1.0),
+		_rng.randf_range(-1.0, 1.0),
+	).normalized() * spin_mag
+
+
+## Transition into DEAD — paints the material red, fires the `died` signal.
+func _enter_dead() -> void:
+	if _state == State.DEAD:
+		return
+	hp = 0.0
+	_dead_timer = 0.0
+	_state = State.DEAD
+	if material:
+		material.albedo_color = Color(1.0, 0.0, 0.0)
+	died.emit(max_hp)
+
+
+## Briefly tint red to signal damage; `_update_color` restores health tint when the timer expires.
 func _flash_red() -> void:
-	# Briefly tint red to signal damage — _update_color restores health color when timer expires.
 	_flash_timer = 0.12
-	if _material:
-		_material.albedo_color = Color(1.0, 0.0, 0.0)
+	if material:
+		material.albedo_color = Color(1.0, 0.0, 0.0)
 
 
+## Repaint the material based on current HP — linear blend between full and low-HP colors.
 func _update_color() -> void:
-	if _material:
+	if material:
 		var t := clampf(1.0 - hp / max_hp, 0.0, 1.0)
-		_material.albedo_color = _COLOR_FULL_HP.lerp(_COLOR_LOW_HP, t)
+		material.albedo_color = _COLOR_FULL_HP.lerp(_COLOR_LOW_HP, t)
+	pass
 
+
+## Signal callback from the defence objective — kill or respawn when this enemy touches it.
 func _on_defence_objective_entered(body: Node3D) -> void:
 	if body != self or _state == State.DEAD:
 		return
 	if should_respawn:
 		_respawn_at_start()
 	else:
-		_enter_dead()  # counts as a kill for wave tracking
+		_enter_dead()
 
 
-## Teleport the enemy back to a random road start position.
+## Teleport the enemy back to a random road start and reset all state.
 func _respawn_at_start() -> void:
 	if _start_positions.size() == 0:
 		return
 
 	var start_pos: Vector3 = _start_positions[_rng.randi_range(0, _start_positions.size() - 1)]
-	var new_pos := start_pos + Vector3(0.0, 2.0, 0.0)
+	global_position = start_pos + Vector3(0.0, 2.0, 0.0)
 
-	# Set position directly. In Godot 4, this is the standard way to teleport 
-	# a RigidBody3D from within _physics_process.
-	global_position = new_pos
-
-	# Stop the visual "zipping" effect caused by physics interpolation.
+	# Kill physics interpolation so the enemy doesn't streak across the level on respawn.
 	if has_method("reset_physics_interpolation"):
 		reset_physics_interpolation()
 
-	linear_velocity = Vector3.ZERO
-	angular_velocity = Vector3.ZERO
+	velocity = Vector3.ZERO
+	_angular_velocity = Vector3.ZERO
 	hp = max_hp
 	_flash_timer = 0.0
-	_prev_velocity = Vector3.ZERO
 	_update_color()
 	_state = State.PATHING
 	_settle_timer = 0.0
+	_ragdoll_timer = 0.0
+	_recovering_timer = 0.0
 	_wander_angle = 0.0
 	_wander_target = 0.0
 	_wander_timer = 0.0
 	_stuck_timer = 0.0
 	_jump_cooldown = 0.0
-	_lock_angular_axes()
 	quaternion = Quaternion.IDENTITY
+	
+	# Clear any recovery metadata
+	if has_meta("recovering_target_quat"):
+		remove_meta("recovering_target_quat")

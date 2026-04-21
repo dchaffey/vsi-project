@@ -215,7 +215,7 @@ func _explode_at_mouse() -> void:
 
 	var bodies = _get_bodies_in_sphere(hit_point, explosion_radius)
 	for body in bodies:
-		if not body is RigidBody3D:
+		if not body.has_method("apply_impulse"):
 			continue
 		var diff = body.global_position - hit_point
 		var dist = diff.length()
@@ -223,7 +223,7 @@ func _explode_at_mouse() -> void:
 		var dir = diff.normalized()
 		if dir.is_zero_approx():
 			dir = Vector3.UP
-		body.apply_central_impulse(dir * explosion_force * falloff)
+		body.apply_impulse(dir, explosion_force * falloff)
 
 func _spawn_explosion(_pos: Vector3) -> void:
 	var explosion = EXPLOSION_PREFAB.instantiate()
@@ -269,7 +269,7 @@ func _process_suck() -> void:
 		_suck_log_cooldown = 0.5
 
 	for body in bodies:
-		if not body is RigidBody3D:
+		if not body.has_method("apply_impulse"):
 			continue
 		var diff = body.global_position - suck_point
 		var dist = diff.length()
@@ -277,7 +277,7 @@ func _process_suck() -> void:
 		var dir = -diff.normalized()
 		if dir.is_zero_approx():
 			dir = Vector3.UP
-		body.linear_velocity += dir * explosion_force * falloff * 0.2
+		body.apply_impulse(dir, explosion_force * falloff * 0.2)
 
 func _get_raycast_hit_point() -> Vector3:
 	if is_instance_valid(_world_raycast) and _world_raycast.is_colliding():

@@ -1,10 +1,10 @@
 extends "res://scripts/towers/building.gd"
 
 var range_radius: float = 20.0  # detection radius for enemies
-var wind_force: float = 20.0  # impulse magnitude per blast
+var wind_force: float = 40.0  # impulse magnitude per blast
 var wind_direction: Vector3 = Vector3(0, 0, -1)  # static wind direction (forward)
-var cylinder_radius: float = 4.0  # radius of the visualization cylinder
-var blast_cooldown: float = 6.0  # time between blasts in seconds
+var cylinder_radius: float = 8.0  # radius of the visualization cylinder
+var blast_cooldown: float = 3.0  # time between blasts in seconds
 var blast_duration: float = 0.3  # how long each blast lasts in seconds
 var _time_since_last_blast: float = 0.0  # elapsed time since last wind blast
 var _blast_active_time: float = 0.0  # elapsed time during current blast
@@ -19,10 +19,10 @@ var _tier: int = 0  # current wind upgrade index
 const MODEL = preload("res://assets/mühle.glb")
 
 static func get_cost() -> int:
-	return 80  # purchase cost
+	return 40  # purchase cost
 
 static func get_upgrade_cost() -> int:
-	return 60  # currency required for the wind tower upgrade tier
+	return 30  # currency required for the wind tower upgrade tier
 
 func _get_collision_box_size() -> Vector3:
 	# Compact cube for the windmill base — used for physics and mouse picking
@@ -113,7 +113,7 @@ func _physics_process(delta: float) -> void:
 func _apply_wind_to_enemies(enemies: Array) -> void:
 	# Transform wind direction to world space based on tower's rotation
 	var world_wind_direction = global_basis * wind_direction
-	# Apply constant wind impulse to all enemies in range
+	# Apply constant wind impulse to all enemies in range — per-frame impulse preserves old tuning and ragdolls on first frame above threshold
 	for enemy in enemies:
-		if enemy is RigidBody3D:
-			enemy.receive_impact_impulse(world_wind_direction, wind_force)
+		if enemy.has_method("apply_impulse"):
+			enemy.apply_impulse(world_wind_direction, wind_force)

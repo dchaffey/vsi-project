@@ -18,7 +18,7 @@ Open in Godot 4.6 editor and run. Main scene: `res://scenes/node_3d.tscn`. Uses 
 - `scripts/terrain.gd` (859 lines) — Procedural terrain generation via FastNoiseLite, A* pathfinding with steepness cost, BFS flow fields, road network with Gaussian blending. Exposes `get_flow_direction()`, `get_height_at()`, `is_on_road()` for other systems.
 - `scripts/world.gd` — World manager that initializes everything and sets up physics layers.
 - `scripts/player_controller.gd` — CharacterBody3D FPS controller (WASD + mouse look + jump).
-- `scripts/enemy.gd` — RigidBody3D enemies that follow terrain flow fields and respawn on goal reach.
+- `scripts/enemy.gd` — CharacterBody3D enemies that follow terrain flow fields and respawn on goal reach. Expose `apply_impulse(dir, mag)` / `apply_force(dir, mag, delta)` for external knockback; ragdoll is a manual state with simulated angular velocity.
 - `scripts/tower.gd` — StaticBody3D turret, fires 3 projectiles per 0.5s at random enemies within range.
 - `scripts/projectile.gd` — Area3D homing missiles using cubic Bézier curves with randomized control points.
 

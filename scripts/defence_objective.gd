@@ -1,6 +1,6 @@
 extends Area3D
 
-## Emitted when an enemy RigidBody3D enters the objective volume.
+## Emitted when an enemy body enters the objective volume.
 signal enemy_entered(enemy: Node3D)
 ## Emitted when HP changes.
 signal hp_changed(current: float, max_hp: float)

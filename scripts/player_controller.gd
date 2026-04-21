@@ -245,7 +245,7 @@ func _explode_at_mouse() -> void:
 
 	var bodies = _get_bodies_in_sphere(hit_point, explosion_radius)
 	for body in bodies:
-		if not body is RigidBody3D:
+		if not body.has_method("apply_impulse"):
 			continue
 		var diff = body.global_position - hit_point
 		var dist = diff.length()
@@ -253,7 +253,7 @@ func _explode_at_mouse() -> void:
 		var dir = diff.normalized()
 		if dir.is_zero_approx():
 			dir = Vector3.UP
-		body.apply_central_impulse(dir * explosion_force * falloff)
+		body.apply_impulse(dir, explosion_force * falloff)
 
 func _spawn_explosion(_pos: Vector3) -> void:
 	var explosion = EXPLOSION_PREFAB.instantiate()
@@ -302,10 +302,10 @@ func _process_suck() -> void:
 		print("[SUCK] pos=", suck_point, " raycast_ok=", hit_point != Vector3.INF, " bodies=", bodies.size())
 		if bodies.size() > 0:
 			for b in bodies:
-				print("  -> ", b.name, " layer=", b.collision_layer, " is_rigid=", b is RigidBody3D)
+				print("  -> ", b.name, " layer=", b.collision_layer)
 
 	for body in bodies:
-		if not body is RigidBody3D:
+		if not body.has_method("apply_impulse"):
 			continue
 		var diff = body.global_position - suck_point
 		var dist = diff.length()
@@ -313,9 +313,8 @@ func _process_suck() -> void:
 		var dir = -diff.normalized()  # pull toward suck point
 		if dir.is_zero_approx():
 			dir = Vector3.UP
-		# Directly modify velocity instead of apply_central_impulse — the deferred impulse
-		# gets overwritten when the enemy sets linear_velocity = corrected in its pathing.
-		body.linear_velocity += dir * explosion_force * falloff * 0.2
+		# Per-frame small-magnitude impulse — stays below ragdoll threshold so suck pulls without tumbling.
+		body.apply_impulse(dir, explosion_force * falloff * 0.2)
 
 func _get_raycast_hit_point() -> Vector3:
 	if not camera:

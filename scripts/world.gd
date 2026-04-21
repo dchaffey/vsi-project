@@ -75,7 +75,7 @@ func _ready() -> void:
 		print("VR manually disabled via ENABLE_VR. Desktop mode active.")
 
 	# Boost global gravity programmatically (optional but effective)
-	ProjectSettings.set_setting("physics/3d/default_gravity", 50.6)
+	ProjectSettings.set_setting("physics/3d/default_gravity", 19.6)
 	
 	spawn_environment()
 	spawn_sunlight()
@@ -91,11 +91,18 @@ func _ready() -> void:
 	_init_wave_timers()
 	_spawn_wave_hud()
 	_show_next_wave_button()  # initial state — player must click to start wave 1
-	# spawn_flow_debug()
+	spawn_flow_debug()
 
 
-# func _process(delta: float) -> void:
-# 	print("FPS %d" % Engine.get_frames_per_second())
+func _process(delta: float) -> void:
+	var l_pressed = Input.is_key_pressed(KEY_L)
+	if l_pressed and not _fullscreen_pressed:
+		var mode = DisplayServer.window_get_mode()
+		if mode == DisplayServer.WINDOW_MODE_FULLSCREEN:
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+		else:
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+	_fullscreen_pressed = l_pressed
 
 func spawn_objectives() -> void:
 	# Half-extents (same as mesh construction) for grid -> world conversion
@@ -161,7 +168,7 @@ func spawn_sunlight() -> void:
 	print("Sun light spawned.")
 
 func spawn_terrain() -> void:
-	var terrain_scene := preload("res://scenes/terrain.tscn")
+	var terrain_scene := preload("res://scenes/lvl3.tscn")
 	terrain = terrain_scene.instantiate()
 	add_child(terrain)
 	print("Terrain spawned.")
@@ -322,7 +329,7 @@ func _start_wave(index: int) -> void:
 
 ## Spawn one enemy per tick until the wave count is exhausted.
 func _on_spawn_tick() -> void:
-	var enemy: RigidBody3D = enemy_spawn.create_enemy()
+	var enemy: CharacterBody3D = enemy_spawn.create_enemy()
 	add_child(enemy)
 	enemy.died.connect(func(_m: float) -> void: _on_enemy_died())
 	_spawned_this_wave += 1
@@ -355,6 +362,7 @@ func _on_game_over() -> void:
 
 var _flow_debug_mi: MeshInstance3D
 var _flow_debug_mat: StandardMaterial3D
+var _fullscreen_pressed := false  # tracks L key state for toggle
 
 func spawn_flow_debug() -> void:
 	_flow_debug_mi = MeshInstance3D.new()

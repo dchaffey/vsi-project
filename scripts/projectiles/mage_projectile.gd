@@ -81,10 +81,10 @@ func _calculate_bezier(t_val: float, p0: Vector3, p1: Vector3, p2: Vector3, p3: 
 	return (1.0 - t_val)**3 * p0 + 3.0 * (1.0 - t_val)**2 * t_val * p1 + 3.0 * (1.0 - t_val) * t_val**2 * p2 + t_val**3 * p3
 func _on_body_entered(body: Node3D) -> void:
 	if body == target_node:
-		if body is RigidBody3D:
+		if body.has_method("apply_impulse"):
 			var impact_dir = (body.global_position - global_position).normalized()
 			if impact_dir.is_zero_approx(): impact_dir = Vector3.UP
 			# Apply impulse with upward component — enemy decides whether to ragdoll based on magnitude
 			var impulse_dir = (impact_dir + Vector3.UP * 0.4).normalized()
-			body.receive_impact_impulse(impulse_dir, impact_force)
+			body.apply_impulse(impulse_dir, impact_force)
 		queue_free()
