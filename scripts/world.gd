@@ -91,7 +91,7 @@ func _ready() -> void:
 	_init_wave_timers()
 	_spawn_wave_hud()
 	_show_next_wave_button()  # initial state — player must click to start wave 1
-	spawn_flow_debug()
+	# spawn_flow_debug()
 
 
 func _process(delta: float) -> void:
@@ -168,7 +168,7 @@ func spawn_sunlight() -> void:
 	print("Sun light spawned.")
 
 func spawn_terrain() -> void:
-	var terrain_scene := preload("res://scenes/lvl3.tscn")
+	var terrain_scene := preload("res://scenes/lvl2.tscn")
 	terrain = terrain_scene.instantiate()
 	add_child(terrain)
 	print("Terrain spawned.")

@@ -29,11 +29,13 @@ var _pending_explosion := false
 var _pending_confirm_placement := false  # deferred to _physics_process to access space state
 var _pending_rotate_ghost := false  # deferred rotation of ghost tower during placement
 var _ghost_rotation_step: float = deg_to_rad(45.0)  # snap rotation increment
+var _ignore_next_placement_release := false  # block instant placement after selecting from shelf
 
 var _placement_script: String = ""
 var _placement_cost: int = 0  # cost of tower being placed
 var _ghost_tower: Node3D = null
 var _ghost_rotation: Vector3 = Vector3.ZERO  # preserve ghost rotation for placement
+var _placement_source_position: Vector3 = Vector3.INF  # shelf preview world position used for spawn animation
 var _query_shape := SphereShape3D.new()
 
 const EXPLOSION_PREFAB = preload("res://addons/ExplosionExport/Prefab.tscn")
@@ -60,6 +62,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if _ghost_tower and event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_LEFT and not event.pressed:
+			# Block instant placement after selecting from shelf
+			if _ignore_next_placement_release:
+				_ignore_next_placement_release = false
+				get_viewport().set_input_as_handled()
+				return
 			# defer to _physics_process — direct_space_state inaccessible outside physics
 			_pending_confirm_placement = true
 			get_viewport().set_input_as_handled()
@@ -147,10 +154,12 @@ func _physics_process(delta: float) -> void:
 		if _suck_timer <= 0.0:
 			_stop_suck()
 
-func start_placement(script_path: String) -> void:
+func start_placement(script_path: String, source_position: Vector3 = Vector3.INF) -> void:
 	cancel_placement()
 	_placement_script = script_path
 	_ghost_rotation = Vector3.ZERO
+	_ignore_next_placement_release = true  # block instant placement after selecting from shelf
+	_placement_source_position = source_position
 
 	# Get cost from building class (static method)
 	var building_class = load(script_path) as Script
@@ -168,6 +177,21 @@ func start_placement(script_path: String) -> void:
 	# Preview the attack radius while the ghost follows the cursor
 	if _ghost_tower.has_method("show_range_indicator"):
 		_ghost_tower.show_range_indicator()
+	# Spawn ghost from shelf preview position for a natural pick-up transition
+	if _placement_source_position != Vector3.INF:
+		_ghost_tower.global_position = _placement_source_position
+		_update_ghost_color(false)
+	else:
+		# Fallback when no source position was supplied
+		var initial_hit = _get_raycast_hit_point()
+		if initial_hit != Vector3.INF:
+			_ghost_tower.global_position = initial_hit
+		else:
+			var mouse_pos = get_viewport().get_mouse_position()
+			var ray_origin = camera.project_ray_origin(mouse_pos)
+			var ray_dir = camera.project_ray_normal(mouse_pos)
+			_ghost_tower.global_position = ray_origin + ray_dir * 15.0
+			_update_ghost_color(false)
 
 func cancel_placement() -> void:
 	if _ghost_tower:
@@ -175,6 +199,8 @@ func cancel_placement() -> void:
 		_ghost_tower = null
 	_placement_script = ""
 	_placement_cost = 0
+	_ignore_next_placement_release = false
+	_placement_source_position = Vector3.INF
 
 func _rotate_ghost_tower() -> void:
 	if _ghost_tower:
@@ -189,6 +215,8 @@ func _update_ghost_position() -> void:
 		if terrain and terrain.get_path_distance(hit_point.x, hit_point.z) < tower_path_clearance:
 			valid = false
 		_update_ghost_color(valid)
+	else:
+		_update_ghost_color(false)
 
 func _update_ghost_color(valid: bool) -> void:
 	var color = Color(0, 1, 0, 0.4) if valid else Color(1, 0, 0, 0.4)
@@ -219,6 +247,7 @@ func _apply_custom_color(node: Node, color: Color) -> void:
 func _confirm_placement() -> void:
 	var hit_point = _get_raycast_hit_point()
 	if hit_point == Vector3.INF:
+		cancel_placement()
 		return
 	if terrain and terrain.get_path_distance(hit_point.x, hit_point.z) < tower_path_clearance:
 		return
@@ -337,6 +366,8 @@ func _get_raycast_hit_point() -> Vector3:
 	var ray_result = space_state.intersect_ray(ray_query)
 	
 	if not ray_result:
+		return Vector3.INF
+	if terrain and ray_result.collider != terrain:
 		return Vector3.INF
 	return ray_result.position
 

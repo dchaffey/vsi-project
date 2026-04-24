@@ -227,9 +227,9 @@ func initialize(player: CharacterBody3D, objective: Area3D, terrain: StaticBody3
 	_update_shelf_money(player.money)
 
 	# Shelf signal connection for both VR and Desktop
-	_tower_shelf.tower_selected.connect(func(script_path, cost):
+	_tower_shelf.tower_selected.connect(func(script_path, cost, source_position):
 		if player.money >= cost:
-			player.start_placement(script_path)
+			player.start_placement(script_path, source_position)
 	)
 
 func _update_shelf_money(amount: float) -> void:

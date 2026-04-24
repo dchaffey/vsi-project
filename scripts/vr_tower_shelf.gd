@@ -1,6 +1,6 @@
 extends Node3D
 
-signal tower_selected(script_path: String, cost: int)
+signal tower_selected(script_path: String, cost: int, source_position: Vector3)
 
 @export var spacing: float = 2.0
 @export var vertical_spacing: float = 3.0
@@ -65,18 +65,21 @@ func _create_tower_option(info: Dictionary, pos: Vector3) -> void:
 	# Scale down the preview towers as they are quite large (17m tall!)
 	# Scale 0.05 makes a 17m tower about 0.85m tall
 	tower_preview.scale = Vector3(0.05, 0.05, 0.05)
+	# Prevent placement raycasts from hitting the dummy tower
+	tower_preview.collision_layer = 0
+	tower_preview.collision_mask = 0
+	tower_preview.input_ray_pickable = false
 	option_root.add_child(tower_preview)
 	
 	# Disable logic for the preview
 	tower_preview.set_physics_process(false)
 	tower_preview.set_process(false)
-	tower_preview.input_ray_pickable = false
 	
 	# 2. Interactable Area for Selection (Works for both XR and Mouse)
 	var interactable = XRToolsInteractableArea.new()
-	# Put it on layer 1 (same as terrain) so mouse raycast hits it easily
-	# Also keep layer 21 for XR Tools if needed
-	interactable.collision_layer = 1 | (1 << 20)
+	# Use XR/UI-only layer (20) so mouse raycasts for placement ignore the shelf
+	# Keep layer 1 removed so placement raycasts (mask 1) don't hit the shelf
+	interactable.collision_layer = 1 << 20
 	interactable.collision_mask = 0
 	interactable.input_ray_pickable = true
 	option_root.add_child(interactable)
@@ -92,13 +95,15 @@ func _create_tower_option(info: Dictionary, pos: Vector3) -> void:
 	interactable.pointer_event.connect(func(event):
 		if event is XRToolsPointerEvent:
 			if event.event_type == XRToolsPointerEvent.Type.PRESSED:
-				tower_selected.emit(info.script, info.cost)
+				tower_selected.emit(info.script, info.cost, tower_preview.global_position)
+				get_viewport().set_input_as_handled()
 	)
 
 	# Mouse Signal
 	interactable.input_event.connect(func(_camera, event, _position, _normal, _shape_idx):
 		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-			tower_selected.emit(info.script, info.cost)
+			tower_selected.emit(info.script, info.cost, tower_preview.global_position)
+			get_viewport().set_input_as_handled()
 	)
 
 	# 3. Label for Name and Cost

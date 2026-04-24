@@ -6,7 +6,15 @@ var control1: Vector3
 var control2_offset: Vector3
 var duration: float = 1.2
 var elapsed_time: float = 0.0
-var impact_force: float = 30.0  # impact velocity applied to enemies on hit
+var impact_force: float = 5.0  # magnitude of impulse applied in explosion
+var explosion_radius: float = 200.0  # radius for knocking back multiple enemies
+var explosion_force: float = 2.0  # force applied per unit falloff in explosion
+var _query_shape := SphereShape3D.new()  # reused sphere for physics queries
+
+var _pending_explosion := false  # deferred explosion to _physics_process for proper space_state access
+var _explosion_pos := Vector3.ZERO  # position to detonate at
+
+const EXPLOSION_PREFAB = preload("res://addons/ExplosionExport/Prefab.tscn")
 
 
 func setup(p_start: Vector3, p_target: Node3D) -> void:
@@ -37,7 +45,7 @@ func setup(p_start: Vector3, p_target: Node3D) -> void:
 	mat.emission_energy_multiplier = 4.0
 	mesh_instance.material_override = mat
 	add_child(mesh_instance)
-	
+
 	# Collision
 	var collision_shape = CollisionShape3D.new()
 	var shape = CapsuleShape3D.new()
@@ -46,32 +54,38 @@ func setup(p_start: Vector3, p_target: Node3D) -> void:
 	collision_shape.shape = shape
 	collision_shape.rotation_degrees.x = 90
 	add_child(collision_shape)
-	
+
 	body_entered.connect(_on_body_entered)
 	collision_mask = 2
 	collision_layer = 0
 	input_ray_pickable = false
 
 func _physics_process(delta: float) -> void:
+	if _pending_explosion:
+		_pending_explosion = false
+		_explode(_explosion_pos)
+		queue_free()
+		return
+
 	if not is_instance_valid(target_node):
 		queue_free()
 		return
-		
+
 	elapsed_time += delta
 	var t = clamp(elapsed_time / duration, 0.0, 1.0)
-	
+
 	# Cubic Bezier
 	var p0 = start_pos
 	var p1 = control1
 	var p3 = target_node.global_position
 	var p2 = p3 + control2_offset
-	
+
 	var final_pos = _calculate_bezier(t, p0, p1, p2, p3)
-	
+
 	if not final_pos.is_equal_approx(global_position):
 		look_at(final_pos)
 		rotate_object_local(Vector3.RIGHT, PI/2)
-	
+
 	global_position = final_pos
 
 	if t >= 1.0:
@@ -79,12 +93,52 @@ func _physics_process(delta: float) -> void:
 
 func _calculate_bezier(t_val: float, p0: Vector3, p1: Vector3, p2: Vector3, p3: Vector3) -> Vector3:
 	return (1.0 - t_val)**3 * p0 + 3.0 * (1.0 - t_val)**2 * t_val * p1 + 3.0 * (1.0 - t_val) * t_val**2 * p2 + t_val**3 * p3
+
+func _explode(impact_pos: Vector3) -> void:
+	# deferred to _physics_process — direct_space_state inaccessible in signal callbacks
+	_spawn_explosion(impact_pos)
+
+	var bodies = _get_bodies_in_sphere(impact_pos, explosion_radius)
+	print(bodies)
+	for body in bodies:
+		if not body.has_method("apply_impulse"):
+			continue
+		var diff = body.global_position - impact_pos
+		var dist = diff.length()
+		var falloff = 1.0 - clamp(dist / explosion_radius, 0.0, 1.0)
+		var dir = diff.normalized()
+		if dir.is_zero_approx():
+			dir = Vector3.UP
+		body.apply_impulse(dir, explosion_force * falloff)
+
 func _on_body_entered(body: Node3D) -> void:
 	if body == target_node:
-		if body.has_method("apply_impulse"):
-			var impact_dir = (body.global_position - global_position).normalized()
-			if impact_dir.is_zero_approx(): impact_dir = Vector3.UP
-			# Apply impulse with upward component — enemy decides whether to ragdoll based on magnitude
-			var impulse_dir = (impact_dir + Vector3.UP * 0.4).normalized()
-			body.apply_impulse(impulse_dir, impact_force)
-		queue_free()
+		_explosion_pos = body.global_position
+		_pending_explosion = true
+
+func _spawn_explosion(pos: Vector3) -> void:
+	# instantiate and display explosion effect at impact point, auto-cleanup after 10s
+	var explosion = EXPLOSION_PREFAB.instantiate()
+	get_parent().add_child(explosion)
+	explosion.global_position = pos
+	get_tree().create_timer(10.0).timeout.connect(explosion.queue_free)
+
+func _get_bodies_in_sphere(center: Vector3, radius: float) -> Array[Node3D]:
+	if radius <= 0.0:
+		return []
+		
+	if not is_equal_approx(_query_shape.radius, radius):
+		_query_shape.radius = radius
+		
+	var query := PhysicsShapeQueryParameters3D.new()
+	query.shape = _query_shape
+	query.transform = Transform3D(Basis(), center)
+	query.collision_mask = 2
+	
+	var results = get_world_3d().direct_space_state.intersect_shape(query)
+	var bodies: Array[Node3D] = []
+	for result in results:
+		bodies.append(result.collider)
+	
+	return bodies
+

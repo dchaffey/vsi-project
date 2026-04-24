@@ -1,7 +1,7 @@
 extends "res://scripts/towers/building.gd"
 
 var range_radius: float = 30.0
-var shoot_interval: float = 0.8
+var shoot_interval: float = 1.5
 var shoot_timer: float = 0.0
 var projectiles_per_shot: int = 1
 var _tower_model: Node3D  # reference to the base tower model

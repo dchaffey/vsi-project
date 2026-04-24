@@ -22,6 +22,8 @@ var _placement_script: String = ""
 var _placement_cost: int = 0
 var _ghost_tower: Node3D = null
 var _ghost_rotation: Vector3 = Vector3.ZERO
+var _placement_source_position: Vector3 = Vector3.INF  # shelf preview world position used for spawn animation
+var _ignore_next_placement_confirm := false  # block instant placement after selecting from shelf
 
 # VR Nodes
 var camera: XRCamera3D
@@ -117,11 +119,13 @@ func _on_right_button_pressed(button_name: String) -> void:
 			if game_board:
 				game_board.hide_building_menu()
 
-func start_placement(script_path: String) -> void:
+func start_placement(script_path: String, source_position: Vector3 = Vector3.INF) -> void:
 	cancel_placement()
 	_stop_suck() # Ensure magic stops when placing
 	_placement_script = script_path
 	_ghost_rotation = Vector3.ZERO
+	_ignore_next_placement_confirm = true  # block instant placement after selecting from shelf
+	_placement_source_position = source_position
 	var building_class = load(script_path) as Script
 	_placement_cost = building_class.get_cost()
 
@@ -136,6 +140,18 @@ func start_placement(script_path: String) -> void:
 	# Preview the attack radius while the ghost follows the controller ray
 	if _ghost_tower.has_method("show_range_indicator"):
 		_ghost_tower.show_range_indicator()
+	# Spawn ghost from shelf preview position for a natural pick-up transition
+	if _placement_source_position != Vector3.INF:
+		_ghost_tower.global_position = _placement_source_position
+		_update_ghost_color(false)
+	else:
+		# Fallback when no source position was supplied
+		var initial_hit = _get_raycast_hit_point()
+		if initial_hit != Vector3.INF:
+			_ghost_tower.global_position = initial_hit
+		else:
+			_ghost_tower.global_position = right_hand.global_position + (-right_hand.global_transform.basis.z * 2.0)
+			_update_ghost_color(false)
 
 	if is_instance_valid(_world_raycast):
 		_world_raycast.add_exception_rid(_ghost_tower.get_rid())
@@ -148,6 +164,8 @@ func cancel_placement() -> void:
 		_ghost_tower = null
 	_placement_script = ""
 	_placement_cost = 0
+	_ignore_next_placement_confirm = false
+	_placement_source_position = Vector3.INF
 
 func _rotate_ghost_tower() -> void:
 	if _ghost_tower:
@@ -162,6 +180,8 @@ func _update_ghost_position() -> void:
 		if terrain and terrain.get_path_distance(hit_point.x, hit_point.z) < tower_path_clearance:
 			valid = false
 		_update_ghost_color(valid)
+	else:
+		_update_ghost_color(false)
 
 func _update_ghost_color(valid: bool) -> void:
 	var color = Color(0, 1, 0, 0.4) if valid else Color(1, 0, 0, 0.4)
@@ -190,8 +210,13 @@ func _apply_custom_color(node: Node, color: Color) -> void:
 		_apply_custom_color(child, color)
 
 func _confirm_placement() -> void:
+	# Block instant placement after selecting from shelf
+	if _ignore_next_placement_confirm:
+		_ignore_next_placement_confirm = false
+		return
 	var hit_point = _get_raycast_hit_point()
 	if hit_point == Vector3.INF:
+		cancel_placement()
 		return
 	if terrain and terrain.get_path_distance(hit_point.x, hit_point.z) < tower_path_clearance:
 		return
@@ -281,6 +306,9 @@ func _process_suck() -> void:
 
 func _get_raycast_hit_point() -> Vector3:
 	if is_instance_valid(_world_raycast) and _world_raycast.is_colliding():
+		var collider = _world_raycast.get_collider()
+		if terrain and collider != terrain:
+			return Vector3.INF
 		return _world_raycast.get_collision_point()
 	return Vector3.INF
 
