@@ -41,8 +41,8 @@ func create_enemy() -> CharacterBody3D:
 	var enemy := CharacterBody3D.new()
 	enemy.position = Vector3(x, y, z)
 	enemy.name = "%s_Enemy_%d" % [name, _enemy_index]
-	enemy.collision_layer = 2        # Layer 2 — Enemies
-	enemy.collision_mask = 1 | 2 | 4 # Ground, Enemies, Player
+	enemy.collision_layer = 2            # Layer 2 — Enemies
+	enemy.collision_mask = 1 | 2 | 4 | 8 # Ground, Enemies, Player, Boulder
 
 	# Set the script first
 	enemy.set_script(load("res://scripts/enemy.gd"))

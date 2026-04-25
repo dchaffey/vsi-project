@@ -1,5 +1,7 @@
 extends Area3D
 
+const EnemyQuery = preload("res://scripts/utils/enemy_query.gd")  # shared enemy query helper for explosion target collection
+
 var start_pos: Vector3
 var target_node: Node3D
 var control1: Vector3
@@ -7,15 +9,13 @@ var control2_offset: Vector3
 var duration: float = 1.2
 var elapsed_time: float = 0.0
 var impact_force: float = 5.0  # magnitude of impulse applied in explosion
-var explosion_radius: float = 200.0  # radius for knocking back multiple enemies
-var explosion_force: float = 2.0  # force applied per unit falloff in explosion
+var explosion_radius: float = 30.0  # radius for knocking back multiple enemies
+var explosion_force: float = 25.0  # force applied per unit falloff in explosion
+var explosion_damage: float = 30.0  # HP removed at direct hit, scaled by distance falloff
 var _query_shape := SphereShape3D.new()  # reused sphere for physics queries
 
 var _pending_explosion := false  # deferred explosion to _physics_process for proper space_state access
 var _explosion_pos := Vector3.ZERO  # position to detonate at
-
-const EXPLOSION_PREFAB = preload("res://addons/ExplosionExport/Prefab.tscn")
-
 
 func setup(p_start: Vector3, p_target: Node3D) -> void:
 	start_pos = p_start
@@ -96,10 +96,7 @@ func _calculate_bezier(t_val: float, p0: Vector3, p1: Vector3, p2: Vector3, p3: 
 
 func _explode(impact_pos: Vector3) -> void:
 	# deferred to _physics_process — direct_space_state inaccessible in signal callbacks
-	_spawn_explosion(impact_pos)
-
 	var bodies = _get_bodies_in_sphere(impact_pos, explosion_radius)
-	print(bodies)
 	for body in bodies:
 		if not body.has_method("apply_impulse"):
 			continue
@@ -110,35 +107,12 @@ func _explode(impact_pos: Vector3) -> void:
 		if dir.is_zero_approx():
 			dir = Vector3.UP
 		body.apply_impulse(dir, explosion_force * falloff)
+		body.apply_dmg(explosion_damage * falloff)
 
 func _on_body_entered(body: Node3D) -> void:
 	if body == target_node:
 		_explosion_pos = body.global_position
 		_pending_explosion = true
 
-func _spawn_explosion(pos: Vector3) -> void:
-	# instantiate and display explosion effect at impact point, auto-cleanup after 10s
-	var explosion = EXPLOSION_PREFAB.instantiate()
-	get_parent().add_child(explosion)
-	explosion.global_position = pos
-	get_tree().create_timer(10.0).timeout.connect(explosion.queue_free)
-
 func _get_bodies_in_sphere(center: Vector3, radius: float) -> Array[Node3D]:
-	if radius <= 0.0:
-		return []
-		
-	if not is_equal_approx(_query_shape.radius, radius):
-		_query_shape.radius = radius
-		
-	var query := PhysicsShapeQueryParameters3D.new()
-	query.shape = _query_shape
-	query.transform = Transform3D(Basis(), center)
-	query.collision_mask = 2
-	
-	var results = get_world_3d().direct_space_state.intersect_shape(query)
-	var bodies: Array[Node3D] = []
-	for result in results:
-		bodies.append(result.collider)
-	
-	return bodies
-
+	return EnemyQuery.get_enemies_in_sphere(self, _query_shape, center, radius, [get_rid()])

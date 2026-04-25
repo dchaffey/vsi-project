@@ -72,6 +72,7 @@ func _ready() -> void:
 		else:
 			print("OpenXR interface not found. Desktop mode active.")
 	else:
+		is_vr_enabled = false  # explicit desktop mode latch so spawn_player never picks the VR script
 		print("VR manually disabled via ENABLE_VR. Desktop mode active.")
 
 	# Boost global gravity programmatically (optional but effective)
@@ -182,7 +183,7 @@ func spawn_player() -> void:
 	player.collision_mask = 1 | 2 # Detect Ground and Enemies
 	
 	# Only attach script; Player builds itself in _ready()
-	if is_vr_enabled:
+	if ENABLE_VR and is_vr_enabled:
 		player.set_script(load("res://scripts/vr_player.gd"))
 	else:
 		player.set_script(load("res://scripts/player_controller.gd"))
@@ -190,7 +191,15 @@ func spawn_player() -> void:
 	add_child(player)
 	player.add_to_group("player")  # allows other nodes to locate the player via group lookup
 	player.terrain = terrain
+	if not (ENABLE_VR and is_vr_enabled):
+		call_deferred("_ensure_desktop_camera_current")
 	print("Player spawned with first-person camera.")
+
+func _ensure_desktop_camera_current() -> void:
+	# Re-assert desktop camera ownership in case another camera became current during scene setup.
+	var desktop_camera := player.get_node_or_null("Camera3D") as Camera3D
+	assert(desktop_camera != null, "Desktop player must create Camera3D")
+	desktop_camera.make_current()
 
 func spawn_game_board() -> void:
 	game_board = Node3D.new()

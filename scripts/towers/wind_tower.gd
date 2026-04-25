@@ -1,9 +1,12 @@
 extends "res://scripts/towers/building.gd"
 
+const EnemyQuery = preload("res://scripts/utils/enemy_query.gd")
+
 var range_radius: float = 20.0  # detection radius for enemies
-var wind_force: float = 40.0  # impulse magnitude per blast
+var wind_force: float = 20.0  # impulse magnitude per blast
 var wind_direction: Vector3 = Vector3(0, 0, -1)  # static wind direction (forward)
 var cylinder_radius: float = 8.0  # radius of the visualization cylinder
+var blast_height_offset: float = 1.5  # shared local Y offset used by both the visual and physics blast volume
 var blast_cooldown: float = 3.0  # time between blasts in seconds
 var blast_duration: float = 0.3  # how long each blast lasts in seconds
 var _time_since_last_blast: float = 0.0  # elapsed time since last wind blast
@@ -11,18 +14,20 @@ var _blast_active_time: float = 0.0  # elapsed time during current blast
 
 var _model_visual: Node3D  # animated windmill model
 var _cylinder_visual: MeshInstance3D  # semi-transparent cylinder showing wind blast area
-var _detection_area: Area3D  # persistent area for enemy detection
+var _blast_query_shape := CylinderShape3D.new()  # shared cylinder shape used for blast physics queries
+var _cylinder_material: StandardMaterial3D  # shared cylinder material toggled between idle and active blast visuals
 
-const MAX_TIER: int = 1  # upgrade cap — final tier shortens cooldown and strengthens gusts
-var _tier: int = 0  # current wind upgrade index
+const _BLAST_IDLE_COLOR := Color(0.5, 0.8, 1.0, 0.25)  # baseline cylinder tint when no gust is active
+const _BLAST_ACTIVE_COLOR := Color(0.9, 0.98, 1.0, 0.58)  # brighter cylinder tint while gust is actively applying force
 
 const MODEL = preload("res://assets/mühle.glb")
 
 static func get_cost() -> int:
 	return 40  # purchase cost
 
-static func get_upgrade_cost() -> int:
-	return 30  # currency required for the wind tower upgrade tier
+func get_max_upgrades() -> int:
+	# Wind tower has one purchased upgrade tier above base.
+	return 1
 
 func _get_collision_box_size() -> Vector3:
 	# Compact cube for the windmill base — used for physics and mouse picking
@@ -37,78 +42,88 @@ func _ready() -> void:
 	add_child(_model_visual)
 	var anim_player = _model_visual.find_child("AnimationPlayer", true, false)
 	anim_player.play("Plane_001Action")
+	_create_blast_visuals()
+	initialize_level()
 
-	# Create the cylinder visualization
+func _create_blast_visuals() -> void:
+	# Build one reusable cylinder visual driven by _apply_level and blast state.
 	_cylinder_visual = MeshInstance3D.new()
-	var cylinder_mesh = CylinderMesh.new()
+	var cylinder_mesh := CylinderMesh.new()
 	cylinder_mesh.top_radius = cylinder_radius
 	cylinder_mesh.bottom_radius = cylinder_radius
 	cylinder_mesh.height = range_radius
 	_cylinder_visual.mesh = cylinder_mesh
-
-	# Rotate the cylinder to point forward along -Z (standard Godot forward)
 	_cylinder_visual.rotation.x = deg_to_rad(90)
-	_cylinder_visual.position = Vector3(0, 0, -range_radius / 2.0)
-
-	# Material for the cylinder (semi-transparent)
-	var mat = StandardMaterial3D.new()
-	mat.transparency = StandardMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_color = Color(0.5, 0.8, 1.0, 0.3) # Light blue, transparent
-	mat.shading_mode = StandardMaterial3D.SHADING_MODE_UNSHADED
-	_cylinder_visual.material_override = mat
+	_cylinder_visual.position = Vector3(0, blast_height_offset, -range_radius * 0.5)
+	_cylinder_material = StandardMaterial3D.new()
+	_cylinder_material.transparency = StandardMaterial3D.TRANSPARENCY_ALPHA
+	_cylinder_material.shading_mode = StandardMaterial3D.SHADING_MODE_UNSHADED
+	_cylinder_material.emission_enabled = true
+	_cylinder_visual.material_override = _cylinder_material
+	_set_blast_visual_active(false)
 	_model_visual.add_child(_cylinder_visual)
 
-	# Persistent detection area — wait 2 frames for physics to initialize
-	await get_tree().physics_frame
-	await get_tree().physics_frame
-	_setup_detection_area()
+func _apply_level(level: int) -> void:
+	# Map level to wind force/cooldown while reusing the same model and blast geometry.
+	assert(level >= 0 and level <= get_max_upgrades(), "Wind level out of range")
+	range_radius = 20.0
+	cylinder_radius = 8.0
+	if level == 0:
+		wind_force = 20.0
+		blast_cooldown = 3.0
+	else:
+		wind_force = 35.0
+		blast_cooldown = 2.0
+	_refresh_blast_shape_and_visual()
+
+func _refresh_blast_shape_and_visual() -> void:
+	# Sync query shape and cylinder mesh dimensions with mapped level stats.
+	_blast_query_shape.radius = cylinder_radius
+	_blast_query_shape.height = range_radius
+	assert(_cylinder_visual.mesh is CylinderMesh, "Wind blast visual must use CylinderMesh")
+	var cylinder_mesh := _cylinder_visual.mesh as CylinderMesh
+	cylinder_mesh.top_radius = cylinder_radius
+	cylinder_mesh.bottom_radius = cylinder_radius
+	cylinder_mesh.height = range_radius
+	_cylinder_visual.position = Vector3(0, blast_height_offset, -range_radius * 0.5)
 
 func place(p_position: Vector3, p_rotation: Vector3 = Vector3.ZERO) -> void:
 	global_position = p_position
 	rotation = p_rotation
 
-func can_upgrade() -> bool:
-	# Wind upgrade is available until the tier cap is reached
-	return _tier < MAX_TIER
-
-func upgrade() -> void:
-	# Stronger gusts and a shorter cooldown — no model swap so the windmill stays recognisable.
-	assert(can_upgrade(), "Wind tower already at max tier")
-	_tier += 1
-	wind_force = 35.0
-	blast_cooldown = 4.0
-
-func _setup_detection_area() -> void:
-	# Create persistent Area3D for enemy detection (scale 1,1,1 to avoid Jolt Physics issues)
-	_detection_area = Area3D.new()
-	_detection_area.scale = Vector3.ONE  # Ensure no scaling inheritance
-	_detection_area.collision_mask = 2 # Only detect enemies
-	_detection_area.input_ray_pickable = false
-	_detection_area.collision_layer = 0
-	var col = CollisionShape3D.new()
-	col.scale = Vector3.ONE  # Ensure collision shape has uniform scale
-	var sphere = SphereShape3D.new()
-	sphere.radius = range_radius
-	col.shape = sphere
-	_detection_area.add_child(col)
-	_detection_area.position = Vector3(0, 1.5, 0)
-	add_child(_detection_area)
-
 func _physics_process(delta: float) -> void:
-	# Guard: if detection area not yet ready, skip
-	if not is_instance_valid(_detection_area):
-		return
-
 	_time_since_last_blast += delta
 	if _time_since_last_blast >= blast_cooldown:
 		_blast_active_time = 0.0
 		_time_since_last_blast = 0.0
 
 	if _blast_active_time < blast_duration:
-		var enemies = _detection_area.get_overlapping_bodies()
+		_set_blast_visual_active(true)
+		var enemies = EnemyQuery.get_enemies_in_shape(self, _blast_query_shape, _get_blast_shape_transform())
 		if not enemies.is_empty():
 			_apply_wind_to_enemies(enemies)
 		_blast_active_time += delta
+	else:
+		_set_blast_visual_active(false)
+
+func _get_blast_shape_transform() -> Transform3D:
+	var local_rotation := Basis(Vector3.RIGHT, deg_to_rad(90.0))  # rotate cylinder Y-axis to local Z-axis (forward volume)
+	var world_rotation := global_basis * local_rotation
+	var local_center := Vector3(0.0, blast_height_offset, -_blast_query_shape.height * 0.5)  # center placed halfway forward from tower origin
+	var world_center := to_global(local_center)
+	return Transform3D(world_rotation, world_center)
+
+func _set_blast_visual_active(is_active: bool) -> void:
+	if not _cylinder_material:
+		return
+	if is_active:
+		_cylinder_material.albedo_color = _BLAST_ACTIVE_COLOR
+		_cylinder_material.emission = _BLAST_ACTIVE_COLOR
+		_cylinder_material.emission_energy_multiplier = 2.0
+		return
+	_cylinder_material.albedo_color = _BLAST_IDLE_COLOR
+	_cylinder_material.emission = _BLAST_IDLE_COLOR
+	_cylinder_material.emission_energy_multiplier = 0.3
 
 func _apply_wind_to_enemies(enemies: Array) -> void:
 	# Transform wind direction to world space based on tower's rotation

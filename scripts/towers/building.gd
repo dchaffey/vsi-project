@@ -1,10 +1,13 @@
 extends StaticBody3D
 class_name Building
 
-# Abstract base class for all tower buildings — subclasses override _get_collision_box_size, get_range, place, upgrade
+# Abstract base class for all tower buildings — subclasses override _get_collision_box_size, get_range, place, _apply_level
 
 var _hover_mat: StandardMaterial3D = null  # cached hover overlay tint — shared across frames
 var _range_indicator: MeshInstance3D = null  # transparent sphere showing attack range — toggled on hover/placement
+var _upgrade_level: int = 0  # current upgrade level where 0 is base placement and increments per purchased upgrade
+
+const MAX_UPGRADES_DEFAULT: int = 3  # global ceiling for number of upgrades any tower can expose
 
 func _notification(what: int) -> void:
 	# Fires even when subclass overrides _ready() without super — create collision immediately, defer debug
@@ -77,10 +80,58 @@ static func get_cost() -> int:
 	assert(false, "Building.get_cost() must be overridden")
 	return 0
 
-static func get_upgrade_cost() -> int:
-	# Currency deducted when the upgrade action is confirmed — subclass must override
-	assert(false, "Building.get_upgrade_cost() must be overridden")
-	return 0
+func get_max_upgrades() -> int:
+	# Number of upgrade purchases this tower supports — subclasses may override but can never exceed three.
+	return MAX_UPGRADES_DEFAULT
+
+func get_upgrade_level() -> int:
+	# Current purchased upgrade count for this tower instance.
+	return _upgrade_level
+
+func get_upgrade_cost() -> int:
+	# Every upgrade purchase costs half of the tower's initial purchase cost.
+	assert(can_upgrade(), "Building.get_upgrade_cost() called at max level")
+	return int(get_cost() / 2.0)
+
+func get_total_invested_cost() -> int:
+	# Total currency spent on this placed tower: base purchase plus fixed half-base upgrade payments.
+	var base_cost := get_cost()
+	var spent_on_upgrades := _upgrade_level * (base_cost / 2)
+	return base_cost + spent_on_upgrades
+
+func get_sell_refund() -> int:
+	# Sell refund is always half of the total invested amount at the current level.
+	return get_total_invested_cost() / 2
+
+func can_upgrade() -> bool:
+	# True while this tower has not reached its declared upgrade cap.
+	var max_upgrades := get_max_upgrades()
+	assert(max_upgrades >= 0 and max_upgrades <= MAX_UPGRADES_DEFAULT, "Building max upgrades must be in range [0, 3]")
+	return _upgrade_level < max_upgrades
+
+func upgrade() -> bool:
+	# Deduct money, advance one level, and apply level-specific stats/model mapping.
+	if not can_upgrade():
+		return false
+	var player := get_tree().get_first_node_in_group("player")
+	if player == null:
+		return false
+	var cost := get_upgrade_cost()
+	if player.money < cost:
+		return false
+	player.money -= cost
+	_upgrade_level += 1
+	_apply_level(_upgrade_level)
+	return true
+
+func initialize_level() -> void:
+	# Apply the base-level mapping once after subclass setup has created required helper nodes/shapes.
+	_upgrade_level = 0
+	_apply_level(_upgrade_level)
+
+func _apply_level(_level: int) -> void:
+	# Level-to-stats/model mapping hook — subclass must define all per-level state.
+	assert(false, "Building._apply_level(level) must be overridden")
 
 func _mouse_enter() -> void:
 	# Overlay a semi-transparent tint and show the attack range sphere to indicate interactability
@@ -155,27 +206,18 @@ func place(_p_position: Vector3, _p_rotation: Vector3 = Vector3.ZERO) -> void:
 	assert(false, "Building.place() must be overridden")
 
 func destroy() -> void:
-	# Refund half the purchase cost to the player before removing from scene.
+	# Refund half the currently invested cost before removing from scene.
 	var player := get_tree().get_first_node_in_group("player")
 	if player:
-		player.money += get_cost() / 2
+		player.money += get_sell_refund()
 	queue_free()
 
 func move() -> void:
-	# Pick the building back up: full refund, re-enter placement with the same script, then delete self.
+	# Pick the building back up: full invested refund, re-enter placement with the same script, then delete self.
 	var player := get_tree().get_first_node_in_group("player")
 	var script_path: String = get_script().resource_path
 	if player:
-		player.money += get_cost()
+		player.money += get_total_invested_cost()
 		if player.has_method("start_placement") and script_path != "":
 			player.start_placement(script_path)
 	queue_free()
-
-func upgrade() -> void:
-	# Upgrade building stats — subclass must override
-	assert(false, "Building.upgrade() must be overridden")
-
-func can_upgrade() -> bool:
-	# True when another upgrade tier is available — subclass must override
-	assert(false, "Building.can_upgrade() must be overridden")
-	return false

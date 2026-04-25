@@ -19,7 +19,7 @@ var move_speed: float = 12.0
 var jump_strength: float = 10.0
 
 ## Current and maximum hit points.
-var hp: float = 30.0
+var hp: float = 50.0
 var max_hp: float = 100.0
 
 ## Cached road-start positions for respawn teleportation.
@@ -79,6 +79,7 @@ var _jump_cooldown: float = 0.0
 ## Wire up terrain queries and the defence-objective signal. Called once on add_child.
 func _ready() -> void:
 	_rng.randomize()
+	add_to_group("enemies")  # registers this unit for gameplay systems that query active enemies by group
 	assert(terrain != null, "enemy.terrain must be set before add_child")
 	assert(defence_objective != null, "enemy.defence_objective must be set before add_child")
 	_start_positions = terrain.get_start_world_positions()

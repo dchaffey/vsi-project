@@ -1,5 +1,7 @@
 extends CharacterBody3D
 
+const EnemyQuery = preload("res://scripts/utils/enemy_query.gd")  # shared enemy area-query helper used by VR abilities
+
 signal money_changed(new_amount: float)
 var money: float = 100.0:
 	set(val):
@@ -286,7 +288,7 @@ func _process_suck() -> void:
 	if hit_point != Vector3.INF:
 		_active_suck_area.global_position = hit_point
 
-	var bodies = _active_suck_area.get_overlapping_bodies()
+	var bodies = EnemyQuery.get_enemies_from_overlaps(_active_suck_area.get_overlapping_bodies())
 	var suck_point = _active_suck_area.global_position
 
 	_suck_log_cooldown -= get_physics_process_delta_time()
@@ -313,20 +315,4 @@ func _get_raycast_hit_point() -> Vector3:
 	return Vector3.INF
 
 func _get_bodies_in_sphere(center: Vector3, radius: float) -> Array[Node3D]:
-	if radius <= 0.0:
-		return []
-		
-	if not is_equal_approx(_query_shape.radius, radius):
-		_query_shape.radius = radius
-		
-	var query := PhysicsShapeQueryParameters3D.new()
-	query.shape = _query_shape
-	query.transform = Transform3D(Basis(), center)
-	query.collision_mask = 2
-	
-	var results = get_world_3d().direct_space_state.intersect_shape(query)
-	var bodies: Array[Node3D] = []
-	for result in results:
-		bodies.append(result.collider)
-	
-	return bodies
+	return EnemyQuery.get_enemies_in_sphere(self, _query_shape, center, radius)

@@ -95,9 +95,9 @@ class BuildingMenu3D extends Node3D:
 		return 0
 
 	func _get_sell_refund(building: Node3D) -> int:
-		# Half-price refund matches Building.destroy() behaviour
-		if building.has_method("get_cost"):
-			return building.get_cost() / 2
+		# Sell value comes from building-level invested-cost tracking.
+		if building.has_method("get_sell_refund"):
+			return building.get_sell_refund()
 		return 0
 
 	func _create_button(action: String, offset: Vector3, text: String, color: Color) -> void:
@@ -265,14 +265,8 @@ func _on_menu_action(action: String, building: Node3D) -> void:
 			if building.has_method("destroy"): building.destroy()
 
 func _try_upgrade(building: Node3D) -> void:
-	# Deduct the upgrade cost from the player before mutating the tower; no-op if unaffordable.
-	assert(building.has_method("get_upgrade_cost"), "Tower must expose get_upgrade_cost()")
+	# Building.upgrade() owns payment + level transition; this call is a single action dispatch.
 	assert(building.has_method("upgrade"), "Tower must implement upgrade()")
-	var cost: int = building.get_upgrade_cost()
-	var player := get_tree().get_first_node_in_group("player")
-	if player == null or player.money < cost:
-		return
-	player.money -= cost
 	building.upgrade()
 
 func show_game_over() -> void:

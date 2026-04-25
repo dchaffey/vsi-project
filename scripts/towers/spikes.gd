@@ -1,18 +1,19 @@
 extends "res://scripts/towers/building.gd"
 
+const EnemyQuery = preload("res://scripts/utils/enemy_query.gd")  # shared enemy query helper for contact-damage detection
+
 var _damage_per_second: float = 100.0  # HP damage dealt per second of contact
 var _enemies_in_range: Dictionary = {}  # tracks enemies in damage zone and their contact time
 var _collision_radius: float = 2.0  # matches building collision shape
 var _query_shape := CylinderShape3D.new()
-
-const MAX_TIER: int = 1  # upgrade cap — final tier nearly doubles contact DPS
-var _tier: int = 0  # current spikes upgrade index
+var _tower_model: Node3D = null  # visual model instance swapped by level mapping when needed
 
 static func get_cost() -> int:
 	return 20  # purchase cost
 
-static func get_upgrade_cost() -> int:
-	return 15  # currency required for the spikes upgrade tier
+func get_max_upgrades() -> int:
+	# Spikes has one purchased upgrade tier above base.
+	return 1
 
 func _get_collision_box_size() -> Vector3:
 	# Box matching barracks footprint — width/depth follow the damage radius
@@ -23,27 +24,39 @@ func get_range() -> float:
 	return 0.0
 
 func _ready() -> void:
+	# Initialize level mapping after local helper shapes are available.
+	initialize_level()
+
+func _apply_level(level: int) -> void:
+	# Map level to trap DPS and visual model.
+	assert(level >= 0 and level <= get_max_upgrades(), "Spikes level out of range")
+	if level == 0:
+		_damage_per_second = 100.0
+		_set_tower_model("res://assets/Barracks.glb")
+	else:
+		_damage_per_second = 180.0
+		_set_tower_model("res://assets/Barracks.glb")
 	_query_shape.height = 8.0
 	_query_shape.radius = _collision_radius
-	# Visual mesh from imported GLB asset
-	var tower_scene: PackedScene = load("res://assets/Barracks.glb")
-	var tower_instance := tower_scene.instantiate()
-	add_child(tower_instance)
+
+func _set_tower_model(scene_path: String) -> void:
+	# Replace active visual with the scene for the provided level mapping.
+	var tower_scene: PackedScene = load(scene_path)
+	assert(tower_scene != null, "Spikes scene missing: %s" % scene_path)
+	if is_instance_valid(_tower_model):
+		_tower_model.queue_free()
+	_tower_model = tower_scene.instantiate()
+	add_child(_tower_model)
 
 func _physics_process(delta: float) -> void:
 	if _collision_radius <= 0.0:
 		return
 		
 	# Query for enemies in range using the building's collision shape
-	var query = PhysicsShapeQueryParameters3D.new()
-	query.shape = _query_shape
-	query.transform = Transform3D(Basis(), global_position + Vector3(0, 4, 0))
-	query.collision_mask = 2  # Only detect enemies on layer 2
-
-	var results = get_world_3d().direct_space_state.intersect_shape(query)
+	var results = EnemyQuery.get_enemies_in_shape(self, _query_shape, Transform3D(Basis(), global_position + Vector3(0, 4, 0)))
 	var enemies_now = {}
 	for result in results:
-		var body = result.collider
+		var body = result
 		if body.has_method("_update_color"):  # duck typing check for Enemy
 			enemies_now[body] = true
 
@@ -66,13 +79,3 @@ func _physics_process(delta: float) -> void:
 func place(p_position: Vector3, p_rotation: Vector3 = Vector3.ZERO) -> void:
 	global_position = p_position
 	rotation = p_rotation
-
-func can_upgrade() -> bool:
-	# Spikes upgrade is available until the tier cap is reached
-	return _tier < MAX_TIER
-
-func upgrade() -> void:
-	# Raise contact DPS — keeps the barracks footprint but makes the trap noticeably deadlier.
-	assert(can_upgrade(), "Spikes already at max tier")
-	_tier += 1
-	_damage_per_second = 180.0

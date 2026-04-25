@@ -1149,27 +1149,11 @@ func _create_terrain_mesh(map: Array) -> ArrayMesh:
 			})
 	
 	# --- Second pass: generate vertices with relative steepness coloring ---
-	print("DEBUG: Terrain max_steepness = ", max_steepness, ", triangle count = ", triangle_data.size())
-	
-	# Debug: print some sample steepness values
-	var sample_count = min(10, triangle_data.size())
-	for i in range(sample_count):
-		var tri = triangle_data[i]
-		print("DEBUG: Triangle ", i, " - steepness = ", tri["steepness"], ", normal.y = ", tri["normal"].y)
-	
-	var steepest_count = 0
-	var steepest_index = -1
 	for i in range(triangle_data.size()):
 		var tri = triangle_data[i]
-		if abs(tri["steepness"] - max_steepness) < 0.0001:  # Floating point comparison
-			steepest_count += 1
-			if steepest_index == -1:  # Track first steepest triangle
-				steepest_index = i
-				print("DEBUG: Steepest triangle at index ", i, " - normal.y = ", tri["normal"].y, ", avg_height = ", tri["avg_height"])
 		_add_faceted_triangle_with_steepness(vertices, normals, uvs, colors, indices,
 			tri["points"], tri["blends"], tri["uvs"], tri["normal"], tri["steepness"], tri["avg_height"],
 			color_sand, color_grass, color_rock, color_road, max_steepness)
-	print("DEBUG: ", steepest_count, " triangles at max steepness (", max_steepness, ")")
 
 	# --- Assemble mesh ---
 	var arrays := []
@@ -1282,11 +1266,6 @@ func _add_faceted_triangle_with_steepness(verts: PackedVector3Array, norms: Pack
 		# Grassy terrain: steep parts lighter
 		var grassy_steepness_factor: float = 0.3 + 0.7 * relative_steepness  # 0.3 for flat, 1.0 for steepest
 		final_col = final_col * grassy_steepness_factor
-	
-	# 6. For debugging: make steepest triangle completely black (AFTER all other calculations)
-	if abs(relative_steepness - 1.0) < 0.0001:  # Account for floating point precision
-		print("DEBUG: Making triangle black! relative_steepness = ", relative_steepness, ", rock_mask = ", rock_mask, ", avg_b = ", avg_b)
-		final_col = Color(0, 0, 0)  # Black
 	
 	# 6. Add 3 unique vertices
 	var start_idx := verts.size()

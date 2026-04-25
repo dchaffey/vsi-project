@@ -1,5 +1,7 @@
 extends CharacterBody3D
 
+const EnemyQuery = preload("res://scripts/utils/enemy_query.gd")  # shared enemy area-query helper used by player abilities
+
 var mouse_sensitivity: float = 0.002
 var zoom_speed: float = 1.1 # Multiplier
 var rotation_sensitivity: float = 0.005
@@ -39,6 +41,14 @@ var _placement_source_position: Vector3 = Vector3.INF  # shelf preview world pos
 var _query_shape := SphereShape3D.new()
 
 const EXPLOSION_PREFAB = preload("res://addons/ExplosionExport/Prefab.tscn")
+const BOULDER_SCRIPT = preload("res://scripts/projectiles/boulder.gd")  # thrown by F key
+
+## Speed of a thrown boulder in world units per second.
+var _ball_speed: float = 40.0
+## Mass of a thrown boulder — higher values increase knockback impulse on enemies.
+var _ball_mass: float = 80.0
+## Deferred flag — throw is resolved in _physics_process so camera transform is stable.
+var _pending_ball := false
 
 func _ready() -> void:
 	_query_shape.radius = explosion_radius
@@ -113,6 +123,8 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_Q:
 			_pending_explosion = true
+		elif event.keycode == KEY_F:
+			_pending_ball = true
 		elif event.keycode == KEY_E:
 			_start_suck() # This just sets timer, safe to call here
 		elif event.keycode == KEY_R and _ghost_tower:
@@ -135,7 +147,10 @@ func _physics_process(delta: float) -> void:
 	if _pending_explosion:
 		_pending_explosion = false
 		_explode_at_mouse()
-		
+
+	if _pending_ball:
+		_pending_ball = false
+		_throw_ball()
 
 	if _pending_confirm_placement:
 		_pending_confirm_placement = false
@@ -290,6 +305,17 @@ func _spawn_explosion(_pos: Vector3) -> void:
 	explosion.global_position = _pos
 	get_tree().create_timer(10.0).timeout.connect(explosion.queue_free)
 
+## Spawn a heavy RigidBody3D boulder from the camera and launch it forward.
+func _throw_ball() -> void:
+	assert(camera != null, "player camera must exist before throwing")
+	var ball: RigidBody3D = BOULDER_SCRIPT.new()
+	ball.mass = _ball_mass
+	get_parent().add_child(ball)
+	var fwd := -camera.global_transform.basis.z
+	ball.global_position = camera.global_position + fwd * (2.0 + 1.0)  # offset by launch gap + radius
+	ball.linear_velocity = fwd * _ball_speed
+
+
 func _start_suck() -> void:
 	_stop_suck()
 	_suck_timer = 3.0
@@ -322,7 +348,7 @@ func _process_suck() -> void:
 	if hit_point != Vector3.INF:
 		_active_suck_area.global_position = hit_point
 
-	var bodies = _active_suck_area.get_overlapping_bodies()
+	var bodies = EnemyQuery.get_enemies_from_overlaps(_active_suck_area.get_overlapping_bodies())
 	var suck_point = _active_suck_area.global_position
 
 	_suck_log_cooldown -= get_physics_process_delta_time()
@@ -372,20 +398,4 @@ func _get_raycast_hit_point() -> Vector3:
 	return ray_result.position
 
 func _get_bodies_in_sphere(center: Vector3, radius: float) -> Array[Node3D]:
-	if radius <= 0.0:
-		return []
-		
-	if not is_equal_approx(_query_shape.radius, radius):
-		_query_shape.radius = radius
-		
-	var query := PhysicsShapeQueryParameters3D.new()
-	query.shape = _query_shape
-	query.transform = Transform3D(Basis(), center)
-	query.collision_mask = 2
-	
-	var results = get_world_3d().direct_space_state.intersect_shape(query)
-	var bodies: Array[Node3D] = []
-	for result in results:
-		bodies.append(result.collider)
-	
-	return bodies
+	return EnemyQuery.get_enemies_in_sphere(self, _query_shape, center, radius)

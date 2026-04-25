@@ -3,7 +3,7 @@ extends Node3D
 signal tower_selected(script_path: String, cost: int, source_position: Vector3)
 
 @export var spacing: float = 2.0
-@export var vertical_spacing: float = 3.0
+@export var vertical_spacing: float = 1.5
 @export var shelf_height: float = 1.0
 
 const MAX_COLUMNS = 4
@@ -39,18 +39,13 @@ func _setup_shelf() -> void:
 	towers.sort_custom(func(a, b): return a.cost < b.cost)
 
 	var total = towers.size()
-	var rows = ceili(total / float(MAX_COLUMNS))
 
 	for i in range(total):
-		var r = i / MAX_COLUMNS
+		var r := floori(float(i) / float(MAX_COLUMNS))
 		var c = i % MAX_COLUMNS
-		
-		# Number of items in this row to center it
-		var items_in_row = min(MAX_COLUMNS, total - r * MAX_COLUMNS)
-		
-		var x_pos = (c - (items_in_row - 1) / 2.0) * spacing
-		# Stack rows vertically (downwards from center)
-		var y_pos = -(r - (rows - 1) / 2.0) * vertical_spacing
+
+		var x_pos = (c - (MAX_COLUMNS - 1) / 2.0) * spacing
+		var y_pos = r * vertical_spacing  # row 0 at bottom, additional rows stack upward
 		
 		_create_tower_option(towers[i], Vector3(x_pos, y_pos, 0))
 
