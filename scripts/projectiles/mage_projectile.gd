@@ -11,7 +11,6 @@ var elapsed_time: float = 0.0
 var impact_force: float = 5.0  # magnitude of impulse applied in explosion
 var explosion_radius: float = 30.0  # radius for knocking back multiple enemies
 var explosion_force: float = 25.0  # force applied per unit falloff in explosion
-var explosion_damage: float = 30.0  # HP removed at direct hit, scaled by distance falloff
 var _query_shape := SphereShape3D.new()  # reused sphere for physics queries
 
 var _pending_explosion := false  # deferred explosion to _physics_process for proper space_state access
@@ -106,8 +105,7 @@ func _explode(impact_pos: Vector3) -> void:
 		var dir = diff.normalized()
 		if dir.is_zero_approx():
 			dir = Vector3.UP
-		body.apply_impulse(dir, explosion_force * falloff)
-		body.apply_dmg(explosion_damage * falloff)
+		body.apply_impulse(dir, explosion_force * falloff, true)
 
 func _on_body_entered(body: Node3D) -> void:
 	if body == target_node:

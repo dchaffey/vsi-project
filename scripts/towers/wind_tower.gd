@@ -3,7 +3,7 @@ extends "res://scripts/towers/building.gd"
 const EnemyQuery = preload("res://scripts/utils/enemy_query.gd")
 
 var range_radius: float = 20.0  # detection radius for enemies
-var wind_force: float = 20.0  # impulse magnitude per blast
+var wind_force: float = 10.0  # impulse magnitude per blast
 var wind_direction: Vector3 = Vector3(0, 0, -1)  # static wind direction (forward)
 var cylinder_radius: float = 8.0  # radius of the visualization cylinder
 var blast_height_offset: float = 1.5  # shared local Y offset used by both the visual and physics blast volume

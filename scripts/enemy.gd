@@ -14,7 +14,7 @@ var terrain: StaticBody3D
 var defence_objective: Area3D
 
 ## Horizontal movement speed in world units per second.
-var move_speed: float = 12.0
+var move_speed: float = 17.0
 ## Vertical jump kick used when pathing gets stuck against small ledges.
 var jump_strength: float = 10.0
 
@@ -61,6 +61,8 @@ const MAX_RECOVERING_TIME := 3.0
 var _impulse_ragdoll_threshold: float = 20.0
 ## Accumulated-velocity threshold that tips RAGDOLL from apply_force or from fast external velocity changes.
 var _velocity_ragdoll_threshold: float = 40.0
+## HP removed per unit of impulse magnitude when deal_damage is true on apply_impulse.
+const IMPULSE_DAMAGE_SCALE := 1.0
 
 ## Manually-integrated angular velocity driving visual tumble while ragdolled.
 var _angular_velocity: Vector3 = Vector3.ZERO
@@ -97,12 +99,19 @@ func _ready() -> void:
 
 ## One-shot velocity kick. Used by explosions, projectile impacts, per-frame wind/suck calls.
 ## If `magnitude` meets the ragdoll threshold, flips the enemy into RAGDOLL.
-func apply_impulse(direction: Vector3, magnitude: float) -> void:
+## If `deal_damage` is true, applies HP damage proportional to magnitude.
+func apply_impulse(direction: Vector3, magnitude: float, deal_damage: bool = false) -> void:
 	if _state == State.DEAD:
 		return
 	velocity += direction.normalized() * magnitude
 	if magnitude >= _impulse_ragdoll_threshold and _state == State.PATHING:
 		_enter_ragdoll()
+	if deal_damage:
+		hp -= magnitude * IMPULSE_DAMAGE_SCALE
+		if hp <= 0.0:
+			_enter_dead()
+		else:
+			_flash_red()
 
 
 ## Frame-rate-independent continuous force. Accumulated velocity can still tip the enemy into RAGDOLL.

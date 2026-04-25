@@ -122,6 +122,11 @@ func upgrade() -> bool:
 	player.money -= cost
 	_upgrade_level += 1
 	_apply_level(_upgrade_level)
+	if is_instance_valid(_range_indicator):
+		var mesh := _range_indicator.mesh as SphereMesh
+		var r := get_range()
+		mesh.radius = r
+		mesh.height = r * 2.0
 	return true
 
 func initialize_level() -> void:
@@ -160,6 +165,10 @@ func show_range_indicator() -> void:
 		# Tag so player_controller's ghost material recursion skips this mesh
 		_range_indicator.add_to_group("range_indicator")
 		add_child(_range_indicator)
+	else:
+		var mesh := _range_indicator.mesh as SphereMesh
+		mesh.radius = r
+		mesh.height = r * 2.0
 	_range_indicator.visible = true
 
 func hide_range_indicator() -> void:

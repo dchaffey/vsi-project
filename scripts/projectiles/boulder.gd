@@ -10,8 +10,6 @@ const RADIUS := 1.0
 const LIFETIME := 15.0
 ## Fraction of (velocity × mass) converted to enemy knockback impulse on contact.
 const IMPACT_SCALE := 0.1
-## Flat HP damage dealt to each enemy on first contact.
-const DAMAGE := 15.0
 
 ## Enemies already struck this flight — prevents re-applying impulse on sustained contact.
 var _hit_enemies: Array = []
@@ -60,5 +58,4 @@ func _on_body_entered(body: Node3D) -> void:
 	_hit_enemies.append(body)
 	var impact_dir := linear_velocity.normalized()                # boulder travel direction at moment of contact
 	var magnitude := linear_velocity.length() * mass * IMPACT_SCALE  # momentum-scaled knockback strength
-	body.apply_impulse(impact_dir, magnitude)
-	body.apply_dmg(DAMAGE)
+	body.apply_impulse(impact_dir, magnitude, true)
