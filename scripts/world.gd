@@ -32,6 +32,8 @@ var _wave_hud: Node3D          # container anchoring both wave label and next-wa
 var _wave_label_3d: Label3D    # static-rotation readout "Wave X / Y"
 var _next_wave_button: Area3D  # clickable region with a Label3D child — player-initiated wave advance
 var _next_wave_label: Label3D  # text on the next-wave button, e.g. "START WAVE 3"
+var _retry_button: Area3D      # always-available retry button shown during waves
+var _retry_label: Label3D      # text on the retry button
 
 func _ready() -> void:
 	# Immediately disable XR to avoid black screen on desktop fallback.
@@ -250,6 +252,7 @@ func _spawn_wave_hud() -> void:
 	add_child(_wave_hud)
 	_build_wave_label_3d()
 	_build_next_wave_button()
+	_build_retry_button()
 
 
 func _build_wave_label_3d() -> void:
@@ -299,6 +302,45 @@ func _build_next_wave_button() -> void:
 	_next_wave_button.input_event.connect(_on_next_wave_input)
 
 
+func _build_retry_button() -> void:
+	# Retry button positioned to the right of the wave label, always visible during waves
+	_retry_button = Area3D.new()
+	_retry_button.collision_layer = 1 << 20
+	_retry_button.collision_mask = 0
+	_retry_button.input_ray_pickable = true
+	_retry_button.position = Vector3(14.0, 6.0, 0.0)
+	_wave_hud.add_child(_retry_button)
+
+	var col := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = Vector3(6.0, 6.0, 6.0)
+	col.shape = shape
+	_retry_button.add_child(col)
+
+	_retry_label = Label3D.new()
+	_retry_label.text = "RETRY"
+	_retry_label.pixel_size = 0.05
+	_retry_label.font_size = 96
+	_retry_label.outline_size = 16
+	_retry_label.modulate = _NEXT_WAVE_BASE_COLOR
+	_retry_label.no_depth_test = true
+	_retry_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_retry_button.add_child(_retry_label)
+
+	_retry_button.mouse_entered.connect(func(): _retry_label.modulate = _NEXT_WAVE_HOVER_COLOR)
+	_retry_button.mouse_exited.connect(func(): _retry_label.modulate = _NEXT_WAVE_BASE_COLOR)
+	_retry_button.input_event.connect(_on_retry_input)
+	_retry_button.visible = false  # shown only during active waves
+
+
+func _on_retry_input(_cam: Node, event: InputEvent, _pos: Vector3, _norm: Vector3, _idx: int) -> void:
+	# Left-click on retry reloads the current scene
+	if not (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT):
+		return
+	get_tree().reload_current_scene()
+	get_viewport().set_input_as_handled()
+
+
 func _on_next_wave_input(_cam: Node, event: InputEvent, _pos: Vector3, _norm: Vector3, _idx: int) -> void:
 	# Left-click on the 3D button consumes the event and advances to the pending wave.
 	if not (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT):
@@ -315,10 +357,12 @@ func _show_next_wave_button() -> void:
 	assert(_next_wave_index < _waves.size(), "No more waves — should not show button")
 	_next_wave_label.text = "START WAVE %d" % (_next_wave_index + 1)
 	_next_wave_button.visible = true
+	_retry_button.visible = false  # hide retry during wave-select phase
 
 
 func _hide_next_wave_button() -> void:
 	_next_wave_button.visible = false
+	_retry_button.visible = true  # show retry during active wave
 
 
 ## Begin spawning enemies for the given wave index.
@@ -355,7 +399,78 @@ func _on_enemy_died() -> void:
 			_show_next_wave_button()
 			print("Wave %d cleared. Press the 3D button to start wave %d." % [_current_wave + 1, _next_wave_index + 1])
 		else:
+			_show_end_game_menu()
 			print("All waves complete.")
+
+
+func _show_end_game_menu() -> void:
+	# Display Retry and Next Level buttons side-by-side where the wave button was
+	_hide_next_wave_button()
+	_retry_button.visible = false  # hide persistent retry button; custom menu buttons below
+
+	# Retry button (left)
+	var retry_button = Area3D.new()
+	retry_button.collision_layer = 1 << 20
+	retry_button.collision_mask = 0
+	retry_button.input_ray_pickable = true
+	_wave_hud.add_child(retry_button)
+	retry_button.position = Vector3(-7.0, -8.0, 0.0)
+
+	var retry_col = CollisionShape3D.new()
+	var retry_shape = BoxShape3D.new()
+	retry_shape.size = Vector3(10.0, 6.0, 6.0)
+	retry_col.shape = retry_shape
+	retry_button.add_child(retry_col)
+
+	var retry_label = Label3D.new()
+	retry_label.text = "RETRY"
+	retry_label.pixel_size = 0.05
+	retry_label.font_size = 96
+	retry_label.outline_size = 16
+	retry_label.modulate = _NEXT_WAVE_BASE_COLOR
+	retry_label.no_depth_test = true
+	retry_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	retry_button.add_child(retry_label)
+
+	retry_button.mouse_entered.connect(func(): retry_label.modulate = _NEXT_WAVE_HOVER_COLOR)
+	retry_button.mouse_exited.connect(func(): retry_label.modulate = _NEXT_WAVE_BASE_COLOR)
+	retry_button.input_event.connect(func(_cam, event, _pos, _norm, _idx):
+		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			get_tree().reload_current_scene()
+			get_viewport().set_input_as_handled()
+	)
+
+	# Next Level button (right)
+	var next_button = Area3D.new()
+	next_button.collision_layer = 1 << 20
+	next_button.collision_mask = 0
+	next_button.input_ray_pickable = true
+	_wave_hud.add_child(next_button)
+	next_button.position = Vector3(7.0, -8.0, 0.0)
+
+	var next_col = CollisionShape3D.new()
+	var next_shape = BoxShape3D.new()
+	next_shape.size = Vector3(10.0, 6.0, 6.0)
+	next_col.shape = next_shape
+	next_button.add_child(next_col)
+
+	var next_label = Label3D.new()
+	next_label.text = "NEXT LEVEL"
+	next_label.pixel_size = 0.05
+	next_label.font_size = 96
+	next_label.outline_size = 16
+	next_label.modulate = _NEXT_WAVE_BASE_COLOR
+	next_label.no_depth_test = true
+	next_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	next_button.add_child(next_label)
+
+	next_button.mouse_entered.connect(func(): next_label.modulate = _NEXT_WAVE_HOVER_COLOR)
+	next_button.mouse_exited.connect(func(): next_label.modulate = _NEXT_WAVE_BASE_COLOR)
+	next_button.input_event.connect(func(_cam, event, _pos, _norm, _idx):
+		if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+			get_tree().change_scene_to_file("res://scenes/lvl3.tscn")
+			get_viewport().set_input_as_handled()
+	)
 
 
 func _on_game_over() -> void:
