@@ -308,7 +308,6 @@ func _build_retry_button() -> void:
 	_retry_button.collision_layer = 1 << 20
 	_retry_button.collision_mask = 0
 	_retry_button.input_ray_pickable = true
-	_retry_button.position = Vector3(14.0, 6.0, 0.0)
 	_wave_hud.add_child(_retry_button)
 
 	var col := CollisionShape3D.new()
