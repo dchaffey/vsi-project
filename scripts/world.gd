@@ -578,9 +578,4 @@ func spawn_walls() -> void:
 		var collision_shape = CollisionShape3D.new()
 		var shape = BoxShape3D.new()
 		shape.size = size
-		collision_shape.shape = shape
-		static_body.add_child(collision_shape)
-
-		add_child(static_body)
-
-	print("Walls spawned around the terrain.")
+		collis

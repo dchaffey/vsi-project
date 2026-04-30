@@ -302,3 +302,4 @@ func show_game_over() -> void:
 	v_box.add_child(btn)
 
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+                                                                                     
