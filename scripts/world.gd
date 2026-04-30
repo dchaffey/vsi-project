@@ -8,7 +8,7 @@ extends Node3D
 ##    - Set ENABLE_VR = true (below).
 ##    - (Optional but recommended for performance) In project.godot: [rendering] xr/enabled=true, vrs/mode=2.
 
-const ENABLE_VR := false
+const ENABLE_VR := true
 
 var terrain: StaticBody3D
 var defence_objective: Area3D
@@ -36,10 +36,11 @@ var _retry_button: Area3D      # always-available retry button shown during wave
 var _retry_label: Label3D      # text on the retry button
 
 func _ready() -> void:
-	# Immediately disable XR to avoid black screen on desktop fallback.
-	# We will re-enable it only if XR initialization succeeds.
-	get_viewport().use_xr = false
-	
+	# Do NOT manually toggle get_viewport().use_xr here. Setting it to false at startup
+	# tells the renderer "no stereo" and prevents multiview shader variants (tonemapper,
+	# glow, etc.) from being compiled. When XR then succeeds and use_xr flips to true,
+	# the missing variants cause null-shader errors and a black screen. StartXR (from
+	# godot-xr-tools) sets use_xr correctly inside its own _ready() — let it.
 	if ENABLE_VR:
 		var xr_interface = XRServer.find_interface("OpenXR")
 		if xr_interface:
@@ -48,17 +49,14 @@ func _ready() -> void:
 			_start_xr = start_xr_scene.instantiate()
 			_start_xr.enable_passthrough = is_passthrough
 			add_child(_start_xr)  # This triggers StartXR._ready() which calls initialize()
-			
+
 			# Give StartXR a frame to complete its internal initialization
 			await get_tree().process_frame
-			
+
 			if xr_interface.is_initialized():
 				is_vr_enabled = true
 				is_passthrough = _start_xr.enable_passthrough
-				
-				# Successfully initialized, now we can enable XR on the viewport
-				get_viewport().use_xr = true
-				
+
 				# Docs recommendation: Disable VSync to prevent frame capping by desktop monitor
 				DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 				

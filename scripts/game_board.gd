@@ -160,6 +160,10 @@ func _setup_3d_elements() -> void:
 		max_h = _terrain.max_height
 
 	# 1. Main Stats Board (Physical panel in world space)
+	# The shipped viewport_2d_in_3d.tscn was edited locally to drop its placeholder ViewportTexture
+	# material; the addon installs a correctly-bound material in its own _ready, so add_child here
+	# no longer triggers "Viewport Texture must be set to use it." If you ever update the
+	# godot-xr-tools addon, re-apply that .tscn edit.
 	var vp_scene = preload("res://addons/godot-xr-tools/objects/viewport_2d_in_3d.tscn")
 	_board_panel = vp_scene.instantiate()
 	add_child(_board_panel)
