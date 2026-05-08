@@ -3,7 +3,7 @@ extends CharacterBody3D
 const EnemyQuery = preload("res://scripts/utils/enemy_query.gd")  # shared enemy area-query helper used by VR abilities
 
 ## Tabletop-VR scale: 1m of physical motion = WORLD_SCALE meters of game motion. Tweak to taste.
-const WORLD_SCALE := 30.0
+const WORLD_SCALE := 60.0
 ## Target world yaw applied by _recenter_player(); 0 rad = facing -Z (north, toward terrain center from south edge).
 const RECENTER_YAW := 0.0
 
@@ -19,6 +19,7 @@ var tower_path_clearance: float = 2.0  # minimum distance from paths for tower p
 
 var terrain: StaticBody3D = null
 var game_board: Node3D = null  # set by world.gd — used to dismiss building selection ring
+var world_content_root: Node3D = null
 
 var _is_locked: bool = false
 var _suck_timer := 0.0
@@ -75,10 +76,30 @@ func _ready() -> void:
 	right_hand.add_child(laser_pointer)
 	# Ensure it can hit our 3D interactables
 	laser_pointer.set_collide_with_areas(true)
+	
+	# XR Tools updates the laser transform dynamically, so simple node scaling breaks.
+	# We must increase its raycast distance and scale the visual meshes directly.
+	if "distance" in laser_pointer:
+		laser_pointer.distance = 100.0 * WORLD_SCALE
+		
+	if "target_radius" in laser_pointer:
+		laser_pointer.target_radius *= WORLD_SCALE
+
+	# Scale the actual laser beam's thickness
+	var laser_mesh_node = laser_pointer.get_node_or_null("Laser")
+	if laser_mesh_node and laser_mesh_node.mesh:
+		var new_laser_mesh = laser_mesh_node.mesh.duplicate()
+		if new_laser_mesh is CylinderMesh:
+			new_laser_mesh.top_radius *= WORLD_SCALE
+			new_laser_mesh.bottom_radius *= WORLD_SCALE
+		elif new_laser_mesh is BoxMesh:
+			new_laser_mesh.size.x *= WORLD_SCALE
+			new_laser_mesh.size.y *= WORLD_SCALE
+		laser_mesh_node.mesh = new_laser_mesh
 
 	# Dedicated raycast for world interaction (avoids depending on XR Tools internal UI pointer logic)
 	_world_raycast = RayCast3D.new()
-	_world_raycast.target_position = Vector3(0, 0, -100) # 100 meters forward
+	_world_raycast.target_position = Vector3(0, 0, -100 * WORLD_SCALE) # Scale raycast distance to ensure it reaches the floor
 	_world_raycast.collision_mask = 1
 	right_hand.add_child(_world_raycast)
 
@@ -142,7 +163,10 @@ func start_placement(script_path: String, source_position: Vector3 = Vector3.INF
 	_ghost_tower.collision_layer = 0
 	_ghost_tower.collision_mask = 0
 	_ghost_tower.set_script(load(script_path))
-	get_parent().add_child(_ghost_tower)
+	if world_content_root:
+		world_content_root.add_child(_ghost_tower)
+	else:
+		get_parent().add_child(_ghost_tower)
 	_ghost_tower.set_physics_process(false)
 	_ghost_tower.set_process(false)
 	_apply_ghost_material(_ghost_tower)
@@ -232,7 +256,10 @@ func _confirm_placement() -> void:
 
 	var building_script = load(_placement_script) as Script
 	var tower = building_script.new()
-	get_parent().add_child(tower)
+	if world_content_root:
+		world_content_root.add_child(tower)
+	else:
+		get_parent().add_child(tower)
 	tower.place(hit_point, Vector3(0, _ghost_rotation.y, 0))
 	if terrain:
 		terrain.deflect_obstacle(hit_point.x, hit_point.z, 2.5, 8.0)
@@ -284,7 +311,10 @@ func _start_suck() -> void:
 	sphere.radius = ability_radius
 	col.shape = sphere
 	_active_suck_area.add_child(col)
-	get_parent().add_child(_active_suck_area)
+	if world_content_root:
+		world_content_root.add_child(_active_suck_area)
+	else:
+		get_parent().add_child(_active_suck_area)
 
 func _stop_suck() -> void:
 	if _active_suck_area:
