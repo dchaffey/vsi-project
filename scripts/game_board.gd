@@ -26,20 +26,19 @@ class GameBoardUI extends Control:
 		money_label.text = "Money: $%.2f" % amount
 
 
-# --- Building Menu (3D billboarded Label3D buttons above the selected building) ---
+# --- Building Menu (3D billboarded buttons above the selected building) ---
 class BuildingMenu3D extends Node3D:
-	# Two clickable world-space text buttons (upgrade / sell) that float near a selected building.
-	signal action_selected(action: String)  # emits "upgrade" or "sell" on label click
+	# Floating upgrade / sell buttons that appear above a selected building.
+	# Uses Button3D so VR pointer + mouse share a single clicked signal path.
+	signal action_selected(action: String)  # emits "upgrade" or "sell" when a button fires clicked
 
 	var _building: Node3D = null  # building this menu acts on — used only to anchor position
-	var _hovered_action: String = ""  # action name of the button currently under the cursor; "" if none
 	var _tower_was_pickable: bool = true  # remembered state of the building's input_ray_pickable before we disabled it
 
-	const CLICK_RADIUS: float = 1.4  # sphere hit area covering the billboarded text from any camera angle
+	const BUTTON_SIZE := Vector3(2.8, 2.0, 2.8)  # Box hit-area sized for both VR ray + mouse picking
 	const VERTICAL_GAP: float = 2.0  # vertical spacing between tower top anchor and each label
 	const UPGRADE_COLOR := Color(0.25, 1.0, 0.35)  # green — tied to money outflow / new tier
 	const SELL_COLOR := Color(1.0, 0.3, 0.3)  # red — tied to destroy / refund
-	const HOVER_COLOR := Color(1.0, 0.95, 0.2)  # yellow — applied on mouse_entered as click affordance
 
 	func setup(building: Node3D) -> void:
 		# Anchor the menu at the building's top; spawn upgrade above and sell below that anchor.
@@ -65,18 +64,6 @@ class BuildingMenu3D extends Node3D:
 		if is_instance_valid(_building) and _building is CollisionObject3D:
 			(_building as CollisionObject3D).input_ray_pickable = _tower_was_pickable
 
-	func _unhandled_input(event: InputEvent) -> void:
-		# Single source of truth for clicks: if a button is hovered, commit its action; otherwise
-		# treat the click as a dismiss. This decouples the click from physics-pick order so hover
-		# highlight and click action can never disagree.
-		if not (event is InputEventMouseButton): return
-		if not event.pressed or event.button_index != MOUSE_BUTTON_LEFT: return
-		if _hovered_action != "":
-			action_selected.emit(_hovered_action)
-		else:
-			queue_free()
-		get_viewport().set_input_as_handled()
-
 	func _building_can_upgrade(building: Node3D) -> bool:
 		# Only draw the upgrade button when the tower reports another tier is available.
 		return building.has_method("can_upgrade") and building.can_upgrade()
@@ -101,41 +88,18 @@ class BuildingMenu3D extends Node3D:
 		return 0
 
 	func _create_button(action: String, offset: Vector3, text: String, color: Color) -> void:
-		# Build one clickable Label3D: Area3D + sphere collision + billboarded text, wired to action_selected.
-		var area := Area3D.new()
-		area.position = offset
-		area.collision_layer = 1  # same layer as ground/towers so mouse raycasts pick it up
-		area.collision_mask = 0
-		area.input_ray_pickable = true
-		add_child(area)
-
-		var col := CollisionShape3D.new()
-		var shape := SphereShape3D.new()
-		shape.radius = CLICK_RADIUS
-		col.shape = shape
-		area.add_child(col)
-
-		var label := Label3D.new()
-		label.text = text
-		label.pixel_size = 0.015
-		label.font_size = 64
-		label.outline_size = 12
-		label.modulate = color
-		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED  # always faces the camera
-		label.no_depth_test = true  # draw over towers so it never gets occluded
-		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		area.add_child(label)
-
-		# Yellow hover feedback + hover-state tracking. _unhandled_input on the menu reads
-		# _hovered_action to decide which action a click commits, so visual hover and click
-		# are driven by the same signal and cannot diverge.
-		area.mouse_entered.connect(func():
-			_hovered_action = action
-			label.modulate = HOVER_COLOR)
-		area.mouse_exited.connect(func():
-			if _hovered_action == action:
-				_hovered_action = ""
-			label.modulate = color)
+		# Build one Button3D — billboarded label, sized for accurate VR + mouse hit, fires action_selected.
+		var btn := Button3D.new()
+		btn.text = text
+		btn.size = BUTTON_SIZE
+		btn.base_color = color
+		btn.pixel_size = 0.015
+		btn.font_size = 64
+		btn.outline_size = 12
+		btn.billboard = true  # menu floats relative to building; billboard keeps it readable
+		btn.position = offset
+		add_child(btn)
+		btn.clicked.connect(func(): action_selected.emit(action))
 
 
 # --- Main GameBoard Manager (Node3D) ---
