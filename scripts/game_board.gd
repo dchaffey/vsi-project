@@ -30,6 +30,7 @@ class GameBoardUI extends Control:
 class BuildingMenu3D extends Node3D:
 	# Floating upgrade / sell buttons that appear above a selected building.
 	# Uses Button3D so VR pointer + mouse share a single clicked signal path.
+	const Button3D := preload("res://scripts/ui/button_3d.gd")  # VR+mouse button script preload (avoid class_name cache)
 	signal action_selected(action: String)  # emits "upgrade" or "sell" when a button fires clicked
 
 	var _building: Node3D = null  # building this menu acts on — used only to anchor position

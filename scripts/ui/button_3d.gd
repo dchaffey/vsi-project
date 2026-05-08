@@ -1,7 +1,10 @@
-class_name Button3D
 extends XRToolsInteractableArea
 
 ## Reusable world-space 3D button that handles both VR pointer events and mouse picking.
+##
+## Consumers preload this script as `const Button3D = preload("res://scripts/ui/button_3d.gd")`
+## rather than relying on the global class_name cache, which can go stale in the editor when
+## new classes are added under res:// without a project rescan.
 ##
 ## Build pattern: instantiate, set properties (text, size, colors, etc.), add_child.
 ## The button auto-builds its CollisionShape3D + Label3D in _ready and emits `clicked`

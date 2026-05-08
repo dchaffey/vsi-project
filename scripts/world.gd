@@ -8,7 +8,8 @@ extends Node3D
 ##    - Set ENABLE_VR = true (below).
 ##    - (Optional but recommended for performance) In project.godot: [rendering] xr/enabled=true, vrs/mode=2.
 
-const ENABLE_VR := true
+const ENABLE_VR := true  # toggles VR startup behavior and script selection
+const Button3D := preload("res://scripts/ui/button_3d.gd")  # VR+mouse button script preload (avoid class_name cache)
 
 var terrain: StaticBody3D
 var defence_objective: Area3D
@@ -30,8 +31,8 @@ var _spawn_timer: Timer        # fires at wave's spawn rate
 ## 3D wave HUD state
 var _wave_hud: Node3D            # container anchoring both wave label and next-wave button above the field
 var _wave_label_3d: Label3D      # static-rotation readout "Wave X / Y"
-var _next_wave_button: Button3D  # player-initiated wave advance — VR + mouse interactable
-var _retry_button: Button3D      # always-available retry button shown during waves
+var _next_wave_button: Node3D  # player-initiated wave advance — VR + mouse interactable
+var _retry_button: Node3D  # always-available retry button shown during waves
 
 func _ready() -> void:
 	# Do NOT manually toggle get_viewport().use_xr here. Setting it to false at startup
