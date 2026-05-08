@@ -2,14 +2,19 @@ extends CharacterBody3D
 
 const EnemyQuery = preload("res://scripts/utils/enemy_query.gd")  # shared enemy area-query helper used by VR abilities
 
+## Tabletop-VR scale: 1m of physical motion = WORLD_SCALE meters of game motion. Tweak to taste.
+const WORLD_SCALE := 30.0
+## Target world yaw applied by _recenter_player(); 0 rad = facing -Z (north, toward terrain center from south edge).
+const RECENTER_YAW := 0.0
+
 signal money_changed(new_amount: float)
 var money: float = 100.0:
 	set(val):
 		money = val
 		money_changed.emit(money)
 
-var explosion_force: float = 60.0
-var explosion_radius: float = 20.0
+var ability_radius: float = 20.0  # sphere radius for the suck ability and enemy queries
+var suck_force: float = 12.0  # per-frame impulse magnitude pulling enemies toward the suck point
 var tower_path_clearance: float = 2.0  # minimum distance from paths for tower placement
 
 var terrain: StaticBody3D = null
@@ -28,6 +33,7 @@ var _placement_source_position: Vector3 = Vector3.INF  # shelf preview world pos
 var _ignore_next_placement_confirm := false  # block instant placement after selecting from shelf
 
 # VR Nodes
+var xr_origin: XROrigin3D  # root of XR-tracked space; world_scale on this node controls tabletop scaling
 var camera: XRCamera3D
 var right_hand: XRController3D
 var left_hand: XRController3D
@@ -36,12 +42,13 @@ var _world_raycast: RayCast3D
 var _query_shape := SphereShape3D.new()
 
 
-const EXPLOSION_PREFAB = preload("res://addons/ExplosionExport/Prefab.tscn")
-
 func _ready() -> void:
-	_query_shape.radius = explosion_radius
-	var xr_origin = XROrigin3D.new()
+	_query_shape.radius = ability_radius
+	xr_origin = XROrigin3D.new()
 	xr_origin.name = "XROrigin3D"
+	# Apply tabletop scale: 1m physical headset motion = WORLD_SCALE m game motion.
+	# Built-in OpenXR scaling — leaves world geometry, physics, and collision shapes untouched.
+	xr_origin.world_scale = WORLD_SCALE
 	add_child(xr_origin)
 
 	camera = XRCamera3D.new()
@@ -94,7 +101,7 @@ func _physics_process(delta: float) -> void:
 			if _suck_timer <= 0.0:
 				_stop_suck()
 
-# Left controller button handler — ax_button=explosion, by_button=suck, trigger=rotate ghost
+# Left controller button handler — ax_button=recenter (X), by_button=suck (Y), trigger=rotate ghost
 func _on_left_button_pressed(button_name: String) -> void:
 	if _is_locked:
 		return
@@ -103,7 +110,7 @@ func _on_left_button_pressed(button_name: String) -> void:
 			_rotate_ghost_tower()
 	else:
 		if button_name == "ax_button":
-			_explode_at_mouse()
+			_recenter_player()
 		if button_name == "by_button":
 			_start_suck()
 
@@ -233,30 +240,37 @@ func _confirm_placement() -> void:
 	money -= _placement_cost
 	cancel_placement()
 
-func _explode_at_mouse() -> void:
-	var hit_point = _get_raycast_hit_point()
-	if hit_point == Vector3.INF:
-		return
+# Snap the XR origin so the player ends up at the south edge of the terrain facing north,
+# placing the tower shelf (world -X) on the player's left and the wave HUD straight ahead.
+func _recenter_player() -> void:
+	assert(terrain != null, "_recenter_player requires terrain reference")
+	assert(xr_origin != null and camera != null, "_recenter_player requires XR nodes")
 
-	_spawn_explosion(hit_point)
+	# South-edge target: feet land on terrain ground at z = +half_d, x = 0.
+	var half_d: float = (terrain.terrain_depth - 1) * terrain.cell_size * 0.5
+	var ground_y: float = terrain.get_height_at(0.0, half_d)
+	var feet_target := Vector3(0.0, ground_y, half_d)
 
-	var bodies = _get_bodies_in_sphere(hit_point, explosion_radius)
-	for body in bodies:
-		if not body.has_method("apply_impulse"):
-			continue
-		var diff = body.global_position - hit_point
-		var dist = diff.length()
-		var falloff = 1.0 - clamp(dist / explosion_radius, 0.0, 1.0)
-		var dir = diff.normalized()
-		if dir.is_zero_approx():
-			dir = Vector3.UP
-		body.apply_impulse(dir, explosion_force * falloff)
+	# Head pose in xr_origin's local space — XR-tracked, already in game units due to world_scale.
+	var head_local: Transform3D = camera.transform
+	var head_local_yaw: float = head_local.basis.get_euler().y
+	# Project head offset onto XZ plane — vertical comes from physical head height * world_scale.
+	var head_offset_xz := Vector3(head_local.origin.x, 0.0, head_local.origin.z)
 
-func _spawn_explosion(_pos: Vector3) -> void:
-	var explosion = EXPLOSION_PREFAB.instantiate()
-	get_parent().add_child(explosion)
-	explosion.global_position = _pos
-	get_tree().create_timer(10.0).timeout.connect(explosion.queue_free)
+	# Pick origin yaw so head ends facing RECENTER_YAW after combining with tracked head yaw.
+	var desired_origin_yaw: float = RECENTER_YAW - head_local_yaw
+	var origin_basis := Basis(Vector3.UP, desired_origin_yaw)
+
+	# Position xr_origin so head's XZ ends above feet_target XZ. Y stays at terrain ground;
+	# the player's head naturally rises by physical_head_height * WORLD_SCALE above that.
+	var rotated_offset_xz := origin_basis * head_offset_xz
+	var origin_pos := Vector3(
+		feet_target.x - rotated_offset_xz.x,
+		feet_target.y,
+		feet_target.z - rotated_offset_xz.z,
+	)
+
+	xr_origin.global_transform = Transform3D(origin_basis, origin_pos)
 
 func _start_suck() -> void:
 	_stop_suck()
@@ -267,7 +281,7 @@ func _start_suck() -> void:
 	_active_suck_area.collision_layer = 0
 	var col = CollisionShape3D.new()
 	var sphere = SphereShape3D.new()
-	sphere.radius = explosion_radius
+	sphere.radius = ability_radius
 	col.shape = sphere
 	_active_suck_area.add_child(col)
 	get_parent().add_child(_active_suck_area)
@@ -300,11 +314,11 @@ func _process_suck() -> void:
 			continue
 		var diff = body.global_position - suck_point
 		var dist = diff.length()
-		var falloff = 1.0 - clamp(dist / explosion_radius, 0.0, 1.0)
+		var falloff = 1.0 - clamp(dist / ability_radius, 0.0, 1.0)
 		var dir = -diff.normalized()
 		if dir.is_zero_approx():
 			dir = Vector3.UP
-		body.apply_impulse(dir, explosion_force * falloff * 0.2)
+		body.apply_impulse(dir, suck_force * falloff)
 
 func _get_raycast_hit_point() -> Vector3:
 	if is_instance_valid(_world_raycast) and _world_raycast.is_colliding():
@@ -313,6 +327,3 @@ func _get_raycast_hit_point() -> Vector3:
 			return Vector3.INF
 		return _world_raycast.get_collision_point()
 	return Vector3.INF
-
-func _get_bodies_in_sphere(center: Vector3, radius: float) -> Array[Node3D]:
-	return EnemyQuery.get_enemies_in_sphere(self, _query_shape, center, radius)
