@@ -578,4 +578,3 @@ func spawn_walls() -> void:
 		var collision_shape = CollisionShape3D.new()
 		var shape = BoxShape3D.new()
 		shape.size = size
-		collis
