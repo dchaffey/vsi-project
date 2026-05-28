@@ -1,3 +1,7 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
+builds/*
+!builds/windows/
+builds/windows/*
+!builds/windows/game.exe
