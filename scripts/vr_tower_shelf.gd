@@ -137,4 +137,5 @@ func _build_controls_label(y: float) -> void:
 	label.modulate = Color(0.85, 0.95, 1.0)
 	label.no_depth_test = true
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	label.rotation_degrees.y = 180.0
 	add_child(label)
