@@ -1,6 +1,5 @@
 extends CharacterBody3D
 
-const EnemyQuery = preload("res://scripts/utils/enemy_query.gd")  # shared enemy area-query helper used by VR abilities
 const PLAYER_MAGE_PROJECTILE_PATH := "res://scripts/projectiles/player_mage_projectile.gd"
 
 ## Tabletop-VR scale: 1m of physical motion = WORLD_SCALE meters of game motion. Tweak to taste.
@@ -14,8 +13,6 @@ var money: float = 100.0:
 		money = val
 		money_changed.emit(money)
 
-var ability_radius: float = 20.0  # sphere radius for the suck ability and enemy queries
-var suck_force: float = 12.0  # per-frame impulse magnitude pulling enemies toward the suck point
 var tower_path_clearance: float = 2.0  # minimum distance from paths for tower placement
 ## Fallback projectile endpoint distance when the controller ray doesn't hit anything.
 var fire_max_distance: float = 100.0
@@ -27,8 +24,6 @@ var game_board: Node3D = null  # set by world.gd — used to dismiss building se
 var world_content_root: Node3D = null
 
 var _is_locked: bool = false
-var _suck_timer := 0.0
-var _active_suck_area: Area3D = null
 var _ghost_rotation_step: float = deg_to_rad(45.0)
 
 var _placement_script: String = ""
@@ -45,13 +40,12 @@ var right_hand: XRController3D
 var left_hand: XRController3D
 var laser_pointer: Node3D
 var _world_raycast: RayCast3D
-var _query_shape := SphereShape3D.new()
 var _rng := RandomNumberGenerator.new()
+var _placement_zone_indicators: Array = []
 
 
 func _ready() -> void:
 	_rng.randomize()
-	_query_shape.radius = ability_radius
 	xr_origin = XROrigin3D.new()
 	xr_origin.name = "XROrigin3D"
 	# Apply tabletop scale: 1m physical headset motion = WORLD_SCALE m game motion.
@@ -120,26 +114,13 @@ func _physics_process(delta: float) -> void:
 		if is_instance_valid(_world_raycast) and _world_raycast.is_colliding():
 			_world_raycast.add_exception_rid(_ghost_tower.get_rid())
 		_update_ghost_position()
-	else:
-		# Process active magic (Suck)
-		if _suck_timer > 0.0:
-			_suck_timer -= delta
-			_process_suck()
-			if _suck_timer <= 0.0:
-				_stop_suck()
 
-# Left controller button handler — ax_button=recenter (X), by_button=suck (Y), trigger=rotate ghost
+# Left controller button handler — ax_button=recenter (X)
 func _on_left_button_pressed(button_name: String) -> void:
 	if _is_locked:
 		return
-	if _ghost_tower:
-		if button_name == "trigger_click":
-			_rotate_ghost_tower()
-	else:
-		if button_name == "ax_button":
-			_recenter_player()
-		if button_name == "by_button":
-			_start_suck()
+	if button_name == "ax_button":
+		_recenter_player()
 
 # Right controller button handler — trigger=confirm/dismiss, ax=cancel placement / fire projectile, by=rotate ghost
 func _on_right_button_pressed(button_name: String) -> void:
@@ -190,7 +171,6 @@ func _fire_mage_projectile() -> void:
 
 func start_placement(script_path: String, source_position: Vector3 = Vector3.INF) -> void:
 	cancel_placement()
-	_stop_suck() # Ensure magic stops when placing
 	_placement_script = script_path
 	_ghost_rotation = Vector3.ZERO
 	_ignore_next_placement_confirm = true  # block instant placement after selecting from shelf
@@ -227,6 +207,7 @@ func start_placement(script_path: String, source_position: Vector3 = Vector3.INF
 
 	if is_instance_valid(_world_raycast):
 		_world_raycast.add_exception_rid(_ghost_tower.get_rid())
+	_show_placement_zone_indicators()
 
 func cancel_placement() -> void:
 	if _ghost_tower:
@@ -238,6 +219,7 @@ func cancel_placement() -> void:
 	_placement_cost = 0
 	_ignore_next_placement_confirm = false
 	_placement_source_position = Vector3.INF
+	_hide_placement_zone_indicators()
 
 func _rotate_ghost_tower() -> void:
 	if _ghost_tower:
@@ -340,57 +322,6 @@ func _recenter_player() -> void:
 
 	xr_origin.global_transform = Transform3D(origin_basis, origin_pos)
 
-func _start_suck() -> void:
-	_stop_suck()
-	_suck_timer = 3.0
-	_active_suck_area = Area3D.new()
-	_active_suck_area.collision_mask = 2
-	_active_suck_area.input_ray_pickable = false
-	_active_suck_area.collision_layer = 0
-	var col = CollisionShape3D.new()
-	var sphere = SphereShape3D.new()
-	sphere.radius = ability_radius
-	col.shape = sphere
-	_active_suck_area.add_child(col)
-	if world_content_root:
-		world_content_root.add_child(_active_suck_area)
-	else:
-		get_parent().add_child(_active_suck_area)
-
-func _stop_suck() -> void:
-	if _active_suck_area:
-		_active_suck_area.queue_free()
-		_active_suck_area = null
-	_suck_timer = 0.0
-
-var _suck_log_cooldown := 0.0
-
-func _process_suck() -> void:
-	if not _active_suck_area:
-		return
-
-	var hit_point = _get_raycast_hit_point()
-	if hit_point != Vector3.INF:
-		_active_suck_area.global_position = hit_point
-
-	var bodies = EnemyQuery.get_enemies_from_overlaps(_active_suck_area.get_overlapping_bodies())
-	var suck_point = _active_suck_area.global_position
-
-	_suck_log_cooldown -= get_physics_process_delta_time()
-	if _suck_log_cooldown <= 0.0:
-		_suck_log_cooldown = 0.5
-
-	for body in bodies:
-		if not body.has_method("apply_impulse"):
-			continue
-		var diff = body.global_position - suck_point
-		var dist = diff.length()
-		var falloff = 1.0 - clamp(dist / ability_radius, 0.0, 1.0)
-		var dir = -diff.normalized()
-		if dir.is_zero_approx():
-			dir = Vector3.UP
-		body.apply_impulse(dir, suck_force * falloff)
-
 func _get_raycast_hit_point() -> Vector3:
 	if is_instance_valid(_world_raycast) and _world_raycast.is_colliding():
 		var collider = _world_raycast.get_collider()
@@ -424,3 +355,87 @@ func _is_in_spawn_no_build_zone(pos: Vector3) -> bool:
 		if sqrt(dx * dx + dz * dz) < radius:
 			return true
 	return false
+
+
+func _show_placement_zone_indicators() -> void:
+	_hide_placement_zone_indicators()
+	var root: Node3D = world_content_root if world_content_root else get_parent() as Node3D
+	if not root:
+		return
+
+	# Orange torus ring for each spawn's no-build radius
+	for spawn_node in get_tree().get_nodes_in_group("enemy_spawn"):
+		if not (spawn_node is Node3D):
+			continue
+		var sp := spawn_node as Node3D
+		var radius: float = sp.get("no_build_radius") if "no_build_radius" in sp else 0.0
+		if radius <= 0.0:
+			continue
+
+		var ring := MeshInstance3D.new()
+		var torus := TorusMesh.new()
+		torus.inner_radius = maxf(radius - 1.5, 0.1)
+		torus.outer_radius = radius + 1.5
+		ring.mesh = torus
+
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = Color(1.0, 0.45, 0.0, 0.65)
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		ring.material_override = mat
+
+		root.add_child(ring)
+		var hy: float = terrain.get_height_at(sp.global_position.x, sp.global_position.z) + 0.2 if terrain else sp.global_position.y
+		ring.global_position = Vector3(sp.global_position.x, hy, sp.global_position.z)
+		_placement_zone_indicators.append(ring)
+
+	# Red ribbon along each enemy path showing the tower_path_clearance corridor
+	if terrain:
+		for path in terrain.get_road_paths_world():
+			var ribbon := _create_path_clearance_ribbon(path, tower_path_clearance)
+			if ribbon:
+				root.add_child(ribbon)
+				_placement_zone_indicators.append(ribbon)
+
+
+func _hide_placement_zone_indicators() -> void:
+	for node in _placement_zone_indicators:
+		if is_instance_valid(node):
+			node.queue_free()
+	_placement_zone_indicators.clear()
+
+
+func _create_path_clearance_ribbon(path: Array, clearance: float) -> MeshInstance3D:
+	if path.size() < 2:
+		return null
+	var imesh := ImmediateMesh.new()
+	imesh.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in range(path.size() - 1):
+		var a: Vector3 = path[i]
+		var b: Vector3 = path[i + 1]
+		var along := b - a
+		if along.length_squared() < 0.0001:
+			continue
+		along = along.normalized()
+		var perp := Vector3(-along.z, 0.0, along.x) * clearance
+		var lift := Vector3(0.0, 0.3, 0.0)
+		var al := a + perp + lift
+		var ar := a - perp + lift
+		var bl := b + perp + lift
+		var br := b - perp + lift
+		imesh.surface_add_vertex(al)
+		imesh.surface_add_vertex(ar)
+		imesh.surface_add_vertex(bl)
+		imesh.surface_add_vertex(bl)
+		imesh.surface_add_vertex(ar)
+		imesh.surface_add_vertex(br)
+	imesh.surface_end()
+	var mi := MeshInstance3D.new()
+	mi.mesh = imesh
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(1.0, 0.15, 0.15, 0.4)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mi.material_override = mat
+	return mi

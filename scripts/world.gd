@@ -105,7 +105,6 @@ func _ready() -> void:
 	_init_wave_timers()
 	_spawn_wave_hud()
 	_show_next_wave_button()  # initial state — player must click to start wave 1
-	spawn_flow_debug()
 
 
 func _process(delta: float) -> void:
@@ -507,40 +506,7 @@ func _on_level_selected(level: int) -> void:
 	get_tree().reload_current_scene()
 
 
-var _flow_debug_mi: MeshInstance3D
-var _flow_debug_mat: StandardMaterial3D
 var _fullscreen_pressed := false  # tracks L key state for toggle
-
-## Draws the A* road paths as red lines above the terrain for debugging.
-func spawn_flow_debug() -> void:
-	_flow_debug_mi = MeshInstance3D.new()
-	_flow_debug_mi.name = "PathDebug"
-	_flow_debug_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-
-	_flow_debug_mat = StandardMaterial3D.new()
-	_flow_debug_mat.albedo_color = Color(1.0, 0.2, 0.2)
-	_flow_debug_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_flow_debug_mat.no_depth_test = true
-	_flow_debug_mi.material_override = _flow_debug_mat
-
-	add_child(_flow_debug_mi)
-	_rebuild_flow_debug()
-	print("Path debug lines spawned.")
-
-func _rebuild_flow_debug() -> void:
-	var paths: Array = terrain.get_road_paths_world()
-	var lift: float = 0.5
-
-	var mesh := ImmediateMesh.new()
-	mesh.surface_begin(Mesh.PRIMITIVE_LINES)
-	for path in paths:
-		for i in range(path.size() - 1):
-			var a: Vector3 = path[i]
-			var b: Vector3 = path[i + 1]
-			mesh.surface_add_vertex(Vector3(a.x, a.y + lift, a.z))
-			mesh.surface_add_vertex(Vector3(b.x, b.y + lift, b.z))
-	mesh.surface_end()
-	_flow_debug_mi.mesh = mesh
 
 func spawn_walls() -> void:
 	var wall_height = terrain.max_height + 30.0 # Walls extend from terrain max height upward

@@ -56,9 +56,7 @@ func create_enemy() -> CharacterBody3D:
 	enemy.set("terrain", terrain)
 	enemy.set("defence_objective", defence_objective)
 
-	# Dwarf model temporarily disabled for pathing debug — see _attach_collision below for the
-	# capsule visualization that takes its place. Re-enable _attach_mesh when pathing is solid.
-	# _attach_mesh(enemy)
+	_attach_mesh(enemy)
 	_attach_collision(enemy)
 
 	enemy.died.connect(func(m_hp: float) -> void:
@@ -121,12 +119,11 @@ func _apply_lateral_offset(path: Array, offset: float) -> Array:
 	return result
 
 
-## Build a capsule (pill) collision shape and a matching debug mesh so the enemy's
-## physics body is visible. Capsule's rounded base/sides slide over uneven terrain far
-## better than a box, which is why we switched from the old BoxShape3D.
+## Build a capsule collision shape for the enemy. Capsule's rounded sides slide over
+## uneven terrain better than a box.
 func _attach_collision(enemy: CharacterBody3D) -> void:
 	var capsule_radius := 0.6
-	var capsule_height := 2.0  # total height incl. hemispherical caps; cylinder portion = height - 2*radius
+	var capsule_height := 2.0  # total height incl. hemispherical caps
 
 	var collision_shape := CollisionShape3D.new()
 	var capsule_shape := CapsuleShape3D.new()
@@ -134,17 +131,3 @@ func _attach_collision(enemy: CharacterBody3D) -> void:
 	capsule_shape.height = capsule_height
 	collision_shape.shape = capsule_shape
 	enemy.add_child(collision_shape)
-
-	# Debug visual — same dimensions as the collision shape, unlit + translucent so
-	# we can see the actual physics body without anything occluding it.
-	var debug_mesh := MeshInstance3D.new()
-	var capsule_mesh := CapsuleMesh.new()
-	capsule_mesh.radius = capsule_radius
-	capsule_mesh.height = capsule_height
-	debug_mesh.mesh = capsule_mesh
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.3, 1.0, 0.3, 0.6)
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	debug_mesh.material_override = mat
-	enemy.add_child(debug_mesh)

@@ -121,9 +121,7 @@ func _build_controls_label(y: float) -> void:
 	label.text = (
 		"— CONTROLS —\n\n" +
 		"LEFT HAND\n" +
-		"X             Recenter\n" +
-		"Y             Pull enemies (3s)\n" +
-		"Trigger       Rotate tower (placing)\n\n" +
+		"X             Recenter\n\n" +
 		"RIGHT HAND\n" +
 		"Trigger       Place tower / Pick up tower\n" +
 		"A             Fire spell / Cancel placement\n" +

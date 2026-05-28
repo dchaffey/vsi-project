@@ -6,14 +6,17 @@ class_name Building
 var _hover_mat: StandardMaterial3D = null  # cached hover overlay tint — shared across frames
 var _range_indicator: MeshInstance3D = null  # transparent sphere showing attack range — toggled on hover/placement
 var _upgrade_level: int = 0  # current upgrade level where 0 is base placement and increments per purchased upgrade
+var _auto_upgrade_elapsed: float = 0.0  # active-wave seconds accumulated toward next free upgrade
+var _bar_root: Node3D = null             # container for the upgrade progress bar — created lazily in _process
+var _bar_fill: MeshInstance3D = null     # fill quad, scaled/offset each frame to show progress
 
 const MAX_UPGRADES_DEFAULT: int = 3  # global ceiling for number of upgrades any tower can expose
+const _BAR_WIDTH: float = 2.4
+const _BAR_HEIGHT: float = 0.6
 
 func _notification(what: int) -> void:
-	# Fires even when subclass overrides _ready() without super — create collision immediately, defer debug
 	if what == NOTIFICATION_READY:
 		_create_collision_shape_node()
-		call_deferred("_spawn_collision_debug_meshes")
 
 func _create_collision_shape_node() -> void:
 	# Build one BoxShape3D from the subclass-provided dimensions — used for physics and mouse picking
@@ -34,46 +37,6 @@ func _get_collision_box_size() -> Vector3:
 func get_range() -> float:
 	# Attack radius in world units — 0 means no range visualization (passive buildings). Subclasses override.
 	return 0.0
-
-func _spawn_collision_debug_meshes() -> void:
-	# Semi-transparent orange overlay matching each CollisionShape3D child's geometry
-	var mat := StandardMaterial3D.new()
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_color = Color(1.0, 0.5, 0.0, 0.3)
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED  # visible from inside and outside
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_attach_debug_mesh_to_shapes(self, mat)
-
-func _attach_debug_mesh_to_shapes(node: Node, mat: StandardMaterial3D) -> void:
-	# Recursively finds CollisionShape3D nodes and parents a matching MeshInstance3D to each
-	if node is CollisionShape3D and node.shape != null:
-		var mesh := _shape_to_debug_mesh(node.shape)
-		if mesh:
-			var mi := MeshInstance3D.new()
-			mi.mesh = mesh
-			mi.material_override = mat
-			node.add_child(mi)
-	for child in node.get_children():
-		_attach_debug_mesh_to_shapes(child, mat)
-
-func _shape_to_debug_mesh(shape: Shape3D) -> Mesh:
-	# Converts a collision shape to an equivalent renderable mesh
-	if shape is BoxShape3D:
-		var m := BoxMesh.new()
-		m.size = shape.size
-		return m
-	if shape is CylinderShape3D:
-		var m := CylinderMesh.new()
-		m.height = shape.height
-		m.top_radius = shape.radius
-		m.bottom_radius = shape.radius
-		return m
-	if shape is SphereShape3D:
-		var m := SphereMesh.new()
-		m.radius = shape.radius
-		m.height = shape.radius * 2.0
-		return m
-	return null
 
 static func get_cost() -> int:
 	# Purchase cost in currency units — subclass must override
@@ -129,14 +92,86 @@ func upgrade() -> bool:
 		mesh.height = r * 2.0
 	return true
 
+func _get_auto_upgrade_duration() -> float:
+	# next_lvl^2 * 10s + 20s  →  lvl 0→1: 30s, 1→2: 60s, 2→3: 110s
+	var next_lvl := _upgrade_level + 1
+	return float(next_lvl * next_lvl) * 10.0 + 20.0
+
 func initialize_level() -> void:
 	# Apply the base-level mapping once after subclass setup has created required helper nodes/shapes.
 	_upgrade_level = 0
+	_auto_upgrade_elapsed = 0.0
 	_apply_level(_upgrade_level)
 
 func _apply_level(_level: int) -> void:
 	# Level-to-stats/model mapping hook — subclass must define all per-level state.
 	assert(false, "Building._apply_level(level) must be overridden")
+
+func _process(delta: float) -> void:
+	if _bar_root == null:
+		_create_upgrade_bar()
+	_bar_root.visible = can_upgrade()
+	if not can_upgrade():
+		return
+	if not get_tree().get_nodes_in_group("enemies").is_empty():
+		_auto_upgrade_elapsed += delta
+	var duration := _get_auto_upgrade_duration()
+	if _auto_upgrade_elapsed >= duration:
+		_auto_upgrade_elapsed = 0.0
+		_perform_auto_upgrade()
+		if not can_upgrade():
+			return
+	_update_upgrade_bar(_auto_upgrade_elapsed / _get_auto_upgrade_duration())
+	var cam := get_viewport().get_camera_3d()
+	if cam != null:
+		var to_cam := cam.global_position - _bar_root.global_position
+		to_cam.y = 0.0
+		if not to_cam.is_zero_approx():
+			_bar_root.rotation.y = atan2(to_cam.x, to_cam.z)
+
+func _perform_auto_upgrade() -> void:
+	if not can_upgrade():
+		return
+	_upgrade_level += 1
+	_apply_level(_upgrade_level)
+	if is_instance_valid(_range_indicator):
+		var mesh := _range_indicator.mesh as SphereMesh
+		var r := get_range()
+		mesh.radius = r
+		mesh.height = r * 2.0
+
+func _create_upgrade_bar() -> void:
+	_bar_root = Node3D.new()
+	_bar_root.position = Vector3(0.0, _get_collision_box_size().y + 0.3, 0.0)
+	var bg_mesh := QuadMesh.new()
+	bg_mesh.size = Vector2(_BAR_WIDTH, _BAR_HEIGHT)
+	var bg_mat := StandardMaterial3D.new()
+	bg_mat.albedo_color = Color(0.15, 0.15, 0.15, 0.75)
+	bg_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	bg_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	bg_mat.no_depth_test = true
+	bg_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var bg_mi := MeshInstance3D.new()
+	bg_mi.mesh = bg_mesh
+	bg_mi.material_override = bg_mat
+	_bar_root.add_child(bg_mi)
+	var fill_mesh := QuadMesh.new()
+	fill_mesh.size = Vector2(_BAR_WIDTH, _BAR_HEIGHT)
+	var fill_mat := StandardMaterial3D.new()
+	fill_mat.albedo_color = Color(1.0, 0.8, 0.0, 1.0)
+	fill_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	fill_mat.no_depth_test = true
+	fill_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_bar_fill = MeshInstance3D.new()
+	_bar_fill.mesh = fill_mesh
+	_bar_fill.material_override = fill_mat
+	_bar_fill.position.z = 0.01
+	_bar_root.add_child(_bar_fill)
+	add_child(_bar_root)
+
+func _update_upgrade_bar(progress: float) -> void:
+	_bar_fill.scale.x = progress
+	_bar_fill.position.x = _BAR_WIDTH * (progress - 1.0) / 2.0
 
 func _mouse_enter() -> void:
 	# Overlay a semi-transparent tint and show the attack range sphere to indicate interactability
@@ -193,8 +228,8 @@ func _build_range_indicator(radius: float) -> MeshInstance3D:
 
 func _apply_overlay(node: Node, mat: StandardMaterial3D) -> void:
 	# Recursively set material_overlay on all mesh surfaces — leaves original materials intact.
-	# Skip the range indicator so the hover tint never paints the range sphere.
-	if node == _range_indicator:
+	# Skip the range indicator and upgrade bar so the hover tint never paints them.
+	if node == _range_indicator or node == _bar_root:
 		return
 	if node is MeshInstance3D:
 		node.material_overlay = mat
