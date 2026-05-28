@@ -5,3 +5,4 @@ builds/*
 !builds/windows/
 builds/windows/*
 !builds/windows/game.exe
+!builds/windows/game.pck
