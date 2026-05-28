@@ -2,6 +2,9 @@ extends Node3D
 
 ## Visual size of the spawn marker cube in world units.
 var size: float = 4.0
+## Horizontal radius around the spawn where the player cannot place towers.
+## Queried by vr_player via the "enemy_spawn" group; tweak per-instance if needed.
+var no_build_radius: float = 50.0
 
 var terrain: StaticBody3D        ## terrain node — used for height queries when placing the enemy
 var defence_objective: Area3D    ## navigation target passed to spawned enemies
@@ -12,6 +15,7 @@ var _enemy_index: int = 0               ## running counter for unique enemy name
 
 
 func _ready() -> void:
+	add_to_group("enemy_spawn")  # registers this spawn so the player can query no-build zones
 	_build_marker_mesh()
 
 
@@ -52,7 +56,9 @@ func create_enemy() -> CharacterBody3D:
 	enemy.set("terrain", terrain)
 	enemy.set("defence_objective", defence_objective)
 
-	_attach_mesh(enemy)
+	# Dwarf model temporarily disabled for pathing debug — see _attach_collision below for the
+	# capsule visualization that takes its place. Re-enable _attach_mesh when pathing is solid.
+	# _attach_mesh(enemy)
 	_attach_collision(enemy)
 
 	enemy.died.connect(func(m_hp: float) -> void:
@@ -60,27 +66,85 @@ func create_enemy() -> CharacterBody3D:
 			player.money += m_hp / 100.0  # reward money proportional to max HP
 	)
 
+	# Assign a laterally-offset copy of one of the A* road paths.
+	var paths: Array = terrain.get_road_paths_world()
+	if paths.size() > 0:
+		var path_idx: int = _enemy_index % paths.size()
+		var lateral_offset: float = _rng.randf_range(-1.5, 1.5)
+		var offset_path: Array = _apply_lateral_offset(paths[path_idx], lateral_offset)
+		enemy.call("assign_path", offset_path, path_idx)
+
 	_enemy_index += 1
 	return enemy
 
 
-## Build and attach the box mesh to enemy.
+## Instantiate the dwarf GLB and attach it to enemy. Feet sit at the bottom of the 2.0-tall collision box.
 func _attach_mesh(enemy: CharacterBody3D) -> void:
-	var mesh_instance := MeshInstance3D.new()
-	var box_mesh := BoxMesh.new()
-	box_mesh.size = Vector3(1.2, 2.0, 1.2)  # Stretched cube (rectangular prism)
+	var dwarf_scene: PackedScene = load("res://assets/early_dwarf.glb") as PackedScene
+	assert(dwarf_scene != null, "Failed to load res://assets/early_dwarf.glb")
+	var model := dwarf_scene.instantiate()
+	model.position = Vector3(0.0, -1.0, 0.0)  # drop so feet sit at the bottom of the collision box
+	enemy.add_child(model)
+
+	# Transparent overlay — alpha 0 at full HP so original textures show through.
+	# enemy.gd raises alpha to red-tint the model on damage flash and low HP.
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.85, 0.85, 0.85)  # light grey
-	box_mesh.material = mat
-	mesh_instance.mesh = box_mesh
-	enemy.set("material", mat)  # stored on enemy for HP-based colour changes
-	enemy.add_child(mesh_instance)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(1.0, 0.0, 0.0, 0.0)
+	enemy.set("material", mat)
+	for mesh_node in _collect_mesh_instances(model):
+		mesh_node.material_overlay = mat
 
 
-## Build and attach the box collision shape to enemy.
+## Recursively gather every MeshInstance3D under a node.
+func _collect_mesh_instances(node: Node) -> Array[MeshInstance3D]:
+	var result: Array[MeshInstance3D] = []
+	if node is MeshInstance3D:
+		result.append(node as MeshInstance3D)
+	for child in node.get_children():
+		result.append_array(_collect_mesh_instances(child))
+	return result
+
+
+## Builds a copy of `path` with each waypoint offset laterally by `offset` world units.
+func _apply_lateral_offset(path: Array, offset: float) -> Array:
+	if path.size() < 2:
+		return path.duplicate()
+	var result: Array = []
+	for i in range(path.size()):
+		var pt: Vector3 = path[i]
+		var prev: Vector3 = path[maxi(i - 1, 0)]
+		var next: Vector3 = path[mini(i + 1, path.size() - 1)]
+		var along := Vector2(next.x - prev.x, next.z - prev.z).normalized()
+		var perp := Vector2(-along.y, along.x)  # 90° left perpendicular
+		result.append(Vector3(pt.x + perp.x * offset, pt.y, pt.z + perp.y * offset))
+	return result
+
+
+## Build a capsule (pill) collision shape and a matching debug mesh so the enemy's
+## physics body is visible. Capsule's rounded base/sides slide over uneven terrain far
+## better than a box, which is why we switched from the old BoxShape3D.
 func _attach_collision(enemy: CharacterBody3D) -> void:
+	var capsule_radius := 0.6
+	var capsule_height := 2.0  # total height incl. hemispherical caps; cylinder portion = height - 2*radius
+
 	var collision_shape := CollisionShape3D.new()
-	var box_shape := BoxShape3D.new()
-	box_shape.size = Vector3(1.2, 2.0, 1.2)  # Match mesh size
-	collision_shape.shape = box_shape
+	var capsule_shape := CapsuleShape3D.new()
+	capsule_shape.radius = capsule_radius
+	capsule_shape.height = capsule_height
+	collision_shape.shape = capsule_shape
 	enemy.add_child(collision_shape)
+
+	# Debug visual — same dimensions as the collision shape, unlit + translucent so
+	# we can see the actual physics body without anything occluding it.
+	var debug_mesh := MeshInstance3D.new()
+	var capsule_mesh := CapsuleMesh.new()
+	capsule_mesh.radius = capsule_radius
+	capsule_mesh.height = capsule_height
+	debug_mesh.mesh = capsule_mesh
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.3, 1.0, 0.3, 0.6)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	debug_mesh.material_override = mat
+	enemy.add_child(debug_mesh)

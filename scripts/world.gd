@@ -12,6 +12,9 @@ extends Node3D
 const ENABLE_VR := true  # toggles VR startup behavior and script selection
 const Button3D := preload("res://scripts/ui/button_3d.gd")  # VR+mouse button script preload (avoid class_name cache)
 
+## Persists across scene reloads so retry/quit-to-menu work without an autoload.
+static var _selected_level: int = 0  # 0 = show selector; 1/2/3 = level in progress
+
 var terrain: StaticBody3D
 var defence_objective: Area3D
 var player: CharacterBody3D
@@ -20,6 +23,9 @@ var enemy_spawn: Node3D       # single spawn point for all waves
 var is_vr_enabled := false
 var is_passthrough := true    # enable MR passthrough when VR headset is detected
 var _start_xr: Node = null    # reference to StartXR node for runtime passthrough toggle
+
+## Level selector HUD shown before gameplay starts.
+var _level_selector_hud: Node3D
 
 ## Wave system state
 var _waves: Array = []         # parsed wave defs: [{enemy_count, spawn_rate}, ...]
@@ -34,6 +40,7 @@ var _wave_hud: Node3D            # container anchoring both wave label and next-
 var _wave_label_3d: Label3D      # static-rotation readout "Wave X / Y"
 var _next_wave_button: Node3D  # player-initiated wave advance — VR + mouse interactable
 var _retry_button: Node3D  # always-available retry button shown during waves
+var _quit_button: Node3D   # returns to level selector during active waves
 
 func _ready() -> void:
 	# Do NOT manually toggle get_viewport().use_xr here. Setting it to false at startup
@@ -77,7 +84,13 @@ func _ready() -> void:
 
 	# Boost global gravity programmatically (optional but effective)
 	ProjectSettings.set_setting("physics/3d/default_gravity", 19.6)
-	
+
+	print("[World] _ready() done. _selected_level=%d is_vr_enabled=%s" % [_selected_level, is_vr_enabled])
+
+	if _selected_level == 0:
+		_spawn_level_selector()
+		return
+
 	spawn_environment()
 	spawn_sunlight()
 
@@ -88,11 +101,11 @@ func _ready() -> void:
 	spawn_player()
 	_assign_player_to_spawns() # player ref needed for death rewards
 	await spawn_game_board()
-	_load_waves("res://assets/levels/lvl1.csv")
+	_load_waves("res://assets/levels/lvl%d.csv" % _selected_level)
 	_init_wave_timers()
 	_spawn_wave_hud()
 	_show_next_wave_button()  # initial state — player must click to start wave 1
-	# spawn_flow_debug()
+	spawn_flow_debug()
 
 
 func _process(delta: float) -> void:
@@ -169,10 +182,10 @@ func spawn_sunlight() -> void:
 	print("Sun light spawned.")
 
 func spawn_terrain() -> void:
-	var terrain_scene := preload("res://scenes/lvl2.tscn")
+	var terrain_scene: PackedScene = load("res://scenes/lvl%d.tscn" % _selected_level)
 	terrain = terrain_scene.instantiate()
 	add_child(terrain)
-	print("Terrain spawned.")
+	print("Terrain spawned (level %d)." % _selected_level)
 
 func spawn_player() -> void:
 	player = CharacterBody3D.new()
@@ -251,6 +264,7 @@ func _spawn_wave_hud() -> void:
 	_build_wave_label_3d()
 	_build_next_wave_button()
 	_build_retry_button()
+	_build_quit_button()
 
 
 func _build_wave_label_3d() -> void:
@@ -284,9 +298,23 @@ func _build_retry_button() -> void:
 	_retry_button.clicked.connect(_on_retry_clicked)
 	_retry_button.visible = false  # shown only during active waves
 
+func _build_quit_button() -> void:
+	_quit_button = Button3D.new()
+	_quit_button.text = "QUIT TO MENU"
+	_quit_button.size = Vector3(12.0, 6.0, 6.0)
+	_quit_button.position = Vector3(0.0, -8.0, 0.0)
+	_quit_button.base_color = Color(1.0, 0.3, 0.3)  # red to distinguish from retry
+	_wave_hud.add_child(_quit_button)
+	_quit_button.clicked.connect(_on_quit_to_menu_clicked)
+	_quit_button.visible = false  # shown only during active waves
+
 
 func _on_retry_clicked() -> void:
-	# Single-source click handler — fires once per VR trigger or mouse click via Button3D.
+	# Reload keeping _selected_level so the same level restarts.
+	get_tree().reload_current_scene()
+
+func _on_quit_to_menu_clicked() -> void:
+	_selected_level = 0
 	get_tree().reload_current_scene()
 
 
@@ -303,12 +331,14 @@ func _show_next_wave_button() -> void:
 	assert(_next_wave_index < _waves.size(), "No more waves — should not show button")
 	_next_wave_button.set_text("START WAVE %d" % (_next_wave_index + 1))
 	_next_wave_button.visible = true
-	_retry_button.visible = false  # hide retry during wave-select phase
+	_retry_button.visible = false
+	_quit_button.visible = false
 
 
 func _hide_next_wave_button() -> void:
 	_next_wave_button.visible = false
-	_retry_button.visible = true  # show retry during active wave
+	_retry_button.visible = true
+	_quit_button.visible = true  # show quit during active wave
 
 
 ## Begin spawning enemies for the given wave index.
@@ -350,28 +380,39 @@ func _on_enemy_died() -> void:
 
 
 func _show_end_game_menu() -> void:
-	# Side-by-side Retry + Next Level Button3D pair replaces the wave button on level completion.
 	_hide_next_wave_button()
-	_retry_button.visible = false  # hide persistent retry; custom menu buttons below take over
+	_retry_button.visible = false
+	_quit_button.visible = false
 
-	var retry_button := Button3D.new()
-	retry_button.text = "RETRY"
-	retry_button.size = Vector3(10.0, 6.0, 6.0)
-	_wave_hud.add_child(retry_button)
-	retry_button.position = Vector3(-7.0, -8.0, 0.0)
-	retry_button.clicked.connect(func(): get_tree().reload_current_scene())
-
+	# "NEXT LEVEL" advances to the next level; wraps back to selector if at the last level.
 	var next_button := Button3D.new()
 	next_button.text = "NEXT LEVEL"
 	next_button.size = Vector3(10.0, 6.0, 6.0)
 	_wave_hud.add_child(next_button)
-	next_button.position = Vector3(7.0, -8.0, 0.0)
-	next_button.clicked.connect(func(): get_tree().change_scene_to_file("res://scenes/lvl3.tscn"))
+	next_button.position = Vector3(0.0, -8.0, 0.0)
+	next_button.clicked.connect(func():
+		var next_lvl := _selected_level + 1
+		_selected_level = next_lvl if next_lvl <= 3 else 0
+		get_tree().reload_current_scene()
+	)
+
+	var menu_button := Button3D.new()
+	menu_button.text = "LEVEL SELECT"
+	menu_button.size = Vector3(10.0, 6.0, 6.0)
+	menu_button.base_color = Color(1.0, 0.3, 0.3)
+	_wave_hud.add_child(menu_button)
+	menu_button.position = Vector3(0.0, -16.0, 0.0)
+	menu_button.clicked.connect(func():
+		_selected_level = 0
+		get_tree().reload_current_scene()
+	)
 
 
 func _on_game_over() -> void:
 	_spawn_timer.stop()
-	_hide_next_wave_button()
+	_next_wave_button.visible = false
+	_retry_button.visible = true
+	_quit_button.visible = true
 
 	if player:
 		player._is_locked = true
@@ -380,13 +421,100 @@ func _on_game_over() -> void:
 		game_board.show_game_over()
 
 
+## Level selector — shown at startup when _selected_level == 0.
+func _spawn_level_selector() -> void:
+	print("[LevelSelector] _spawn_level_selector() called. is_vr_enabled=%s ENABLE_VR=%s" % [is_vr_enabled, ENABLE_VR])
+	spawn_environment()
+	spawn_sunlight()
+
+	_level_selector_hud = Node3D.new()
+	add_child(_level_selector_hud)
+
+	var title := Label3D.new()
+	title.text = "SELECT LEVEL"
+	title.pixel_size = 0.05
+	title.font_size = 96
+	title.outline_size = 16
+	title.modulate = Color(1.0, 1.0, 0.5)
+	title.no_depth_test = true
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.position = Vector3(0.0, 6.0, 0.0)
+	_level_selector_hud.add_child(title)
+
+	for i in range(3):
+		var level_num := i + 1
+		var btn := Button3D.new()
+		btn.text = "LEVEL %d" % level_num
+		btn.size = Vector3(12.0, 6.0, 6.0)
+		btn.position = Vector3(0.0, -i * 9.0, 0.0)
+		_level_selector_hud.add_child(btn)
+		btn.clicked.connect(_on_level_selected.bind(level_num))
+
+	if ENABLE_VR and is_vr_enabled:
+		_spawn_level_selector_xr()
+	else:
+		print("[LevelSelector] Desktop mode — spawning fallback camera.")
+		var cam_node := Node3D.new()
+		cam_node.position = Vector3(0.0, 5.0, 5.0)
+		add_child(cam_node)
+		var cam := Camera3D.new()
+		cam_node.add_child(cam)
+		cam.make_current()
+		_level_selector_hud.position = Vector3(0.0, 5.0, -10.0)
+		print("[LevelSelector] Desktop camera at %s, HUD at %s" % [cam_node.position, _level_selector_hud.position])
+
+
+## Spawns the minimal XR rig needed to see the level selector in VR (no terrain/player yet).
+## Mirrors the essential parts of vr_player._ready() so the HMD + laser pointer work.
+func _spawn_level_selector_xr() -> void:
+	const WORLD_SCALE := 60.0  # must match vr_player.WORLD_SCALE
+
+	var xr_origin := XROrigin3D.new()
+	xr_origin.name = "XROrigin3D"
+	xr_origin.world_scale = WORLD_SCALE
+	add_child(xr_origin)
+
+	var cam := XRCamera3D.new()
+	xr_origin.add_child(cam)
+
+	var right_hand := XRController3D.new()
+	right_hand.tracker = "right_hand"
+	xr_origin.add_child(right_hand)
+
+	var left_hand := XRController3D.new()
+	left_hand.tracker = "left_hand"
+	xr_origin.add_child(left_hand)
+
+	# Laser pointer for clicking Button3D UI elements (same wiring as vr_player).
+	var pointer_scene = preload("res://addons/godot-xr-tools/functions/function_pointer.tscn")
+	var laser := pointer_scene.instantiate()
+	laser.set_collide_with_areas(true)
+	right_hand.add_child(laser)
+	if "distance" in laser:
+		laser.distance = 100.0 * WORLD_SCALE
+	if "target_radius" in laser:
+		laser.target_radius *= WORLD_SCALE
+
+	# With world_scale=60, physical 1.7m head height → ~102 world units.
+	# Place HUD at eye height (~100 wu) and 1 m physical forward (60 wu).
+	_level_selector_hud.position = Vector3(0.0, 100.0, -60.0)
+	print("[LevelSelector] XR rig spawned. HUD at %s (world_scale=%.0f)" % [_level_selector_hud.position, WORLD_SCALE])
+
+
+func _on_level_selected(level: int) -> void:
+	print("[LevelSelector] Level %d selected. Reloading scene." % level)
+	_selected_level = level
+	get_tree().reload_current_scene()
+
+
 var _flow_debug_mi: MeshInstance3D
 var _flow_debug_mat: StandardMaterial3D
 var _fullscreen_pressed := false  # tracks L key state for toggle
 
+## Draws the A* road paths as red lines above the terrain for debugging.
 func spawn_flow_debug() -> void:
 	_flow_debug_mi = MeshInstance3D.new()
-	_flow_debug_mi.name = "FlowDebug"
+	_flow_debug_mi.name = "PathDebug"
 	_flow_debug_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 	_flow_debug_mat = StandardMaterial3D.new()
@@ -397,40 +525,20 @@ func spawn_flow_debug() -> void:
 
 	add_child(_flow_debug_mi)
 	_rebuild_flow_debug()
-	terrain.flow_field_changed.connect(_rebuild_flow_debug)
-	print("Flow debug arrows spawned.")
+	print("Path debug lines spawned.")
 
 func _rebuild_flow_debug() -> void:
-	var half_w: float = (terrain.terrain_width - 1) * terrain.cell_size * 0.5
-	var half_d: float = (terrain.terrain_depth - 1) * terrain.cell_size * 0.5
-	var step := 3
-	var arrow_len := 1.5
-	var lift := 0.3
+	var paths: Array = terrain.get_road_paths_world()
+	var lift: float = 0.5
 
 	var mesh := ImmediateMesh.new()
 	mesh.surface_begin(Mesh.PRIMITIVE_LINES)
-	for gx in range(0, terrain.terrain_width, step):
-		for gz in range(0, terrain.terrain_depth, step):
-			var wx: float = gx * terrain.cell_size - half_w
-			var wz: float = gz * terrain.cell_size - half_d
-			var flow: Vector2 = terrain.get_flow_direction(wx, wz)
-			if flow.length_squared() < 0.001:
-				continue
-			var wy: float = terrain.get_height_at(wx, wz) + lift
-			var origin := Vector3(wx, wy, wz)
-			var dir3 := Vector3(flow.x, 0, flow.y).normalized() * arrow_len
-			var tip := origin + dir3
-
-			# Shaft
-			mesh.surface_add_vertex(origin)
-			mesh.surface_add_vertex(tip)
-
-			# Arrowhead wings
-			var right := dir3.cross(Vector3.UP).normalized() * 0.3
-			mesh.surface_add_vertex(tip)
-			mesh.surface_add_vertex(tip - dir3 * 0.3 + right)
-			mesh.surface_add_vertex(tip)
-			mesh.surface_add_vertex(tip - dir3 * 0.3 - right)
+	for path in paths:
+		for i in range(path.size() - 1):
+			var a: Vector3 = path[i]
+			var b: Vector3 = path[i + 1]
+			mesh.surface_add_vertex(Vector3(a.x, a.y + lift, a.z))
+			mesh.surface_add_vertex(Vector3(b.x, b.y + lift, b.z))
 	mesh.surface_end()
 	_flow_debug_mi.mesh = mesh
 

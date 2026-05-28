@@ -26,6 +26,12 @@ func get_range() -> float:
 func _ready() -> void:
 	# Initialize level mapping after local helper shapes are available.
 	initialize_level()
+	# Spike walls reflect player boulders. The StaticBody3D + box collision (from Building)
+	# already stops boulders via the shared Ground layer; this material gives Jolt the
+	# restitution needed for a visible ricochet rather than a dead stop.
+	var phys_mat := PhysicsMaterial.new()
+	phys_mat.bounce = 0.7
+	physics_material_override = phys_mat
 
 func _apply_level(level: int) -> void:
 	# Map level to trap DPS and visual model.

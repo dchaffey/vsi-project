@@ -227,7 +227,7 @@ func _update_ghost_position() -> void:
 	if hit_point != Vector3.INF:
 		_ghost_tower.global_position = hit_point
 		var valid = true
-		if terrain and terrain.get_path_distance(hit_point.x, hit_point.z) < tower_path_clearance:
+		if terrain and terrain.is_near_enemy_path(hit_point.x, hit_point.z, tower_path_clearance):
 			valid = false
 		_update_ghost_color(valid)
 	else:
@@ -264,7 +264,7 @@ func _confirm_placement() -> void:
 	if hit_point == Vector3.INF:
 		cancel_placement()
 		return
-	if terrain and terrain.get_path_distance(hit_point.x, hit_point.z) < tower_path_clearance:
+	if terrain and terrain.is_near_enemy_path(hit_point.x, hit_point.z, tower_path_clearance):
 		return
 
 	# Create building instance, add to scene tree first, then call place()
@@ -272,8 +272,6 @@ func _confirm_placement() -> void:
 	var tower = building_script.new()
 	get_parent().add_child(tower)
 	tower.place(hit_point, Vector3(0, _ghost_rotation.y, 0))
-	if terrain:
-		terrain.deflect_obstacle(hit_point.x, hit_point.z, 2.5, 8.0)
 
 	# Subtract cost from money
 	money -= _placement_cost

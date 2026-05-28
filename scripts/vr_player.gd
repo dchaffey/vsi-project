@@ -1,6 +1,7 @@
 extends CharacterBody3D
 
 const EnemyQuery = preload("res://scripts/utils/enemy_query.gd")  # shared enemy area-query helper used by VR abilities
+const PLAYER_MAGE_PROJECTILE_PATH := "res://scripts/projectiles/player_mage_projectile.gd"
 
 ## Tabletop-VR scale: 1m of physical motion = WORLD_SCALE meters of game motion. Tweak to taste.
 const WORLD_SCALE := 60.0
@@ -16,6 +17,10 @@ var money: float = 100.0:
 var ability_radius: float = 20.0  # sphere radius for the suck ability and enemy queries
 var suck_force: float = 12.0  # per-frame impulse magnitude pulling enemies toward the suck point
 var tower_path_clearance: float = 2.0  # minimum distance from paths for tower placement
+## Fallback projectile endpoint distance when the controller ray doesn't hit anything.
+var fire_max_distance: float = 100.0
+## Horizontal spread radius (meters) randomly applied to the projectile endpoint.
+var fire_endpoint_spread: float = 3.0
 
 var terrain: StaticBody3D = null
 var game_board: Node3D = null  # set by world.gd — used to dismiss building selection ring
@@ -41,9 +46,11 @@ var left_hand: XRController3D
 var laser_pointer: Node3D
 var _world_raycast: RayCast3D
 var _query_shape := SphereShape3D.new()
+var _rng := RandomNumberGenerator.new()
 
 
 func _ready() -> void:
+	_rng.randomize()
 	_query_shape.radius = ability_radius
 	xr_origin = XROrigin3D.new()
 	xr_origin.name = "XROrigin3D"
@@ -110,7 +117,6 @@ func _physics_process(delta: float) -> void:
 		return
 
 	if _ghost_tower:
-		# Update ghost position each frame
 		if is_instance_valid(_world_raycast) and _world_raycast.is_colliding():
 			_world_raycast.add_exception_rid(_ghost_tower.get_rid())
 		_update_ghost_position()
@@ -135,19 +141,52 @@ func _on_left_button_pressed(button_name: String) -> void:
 		if button_name == "by_button":
 			_start_suck()
 
-# Right controller button handler — trigger=confirm/dismiss, ax/by=cancel placement
+# Right controller button handler — trigger=confirm/dismiss, ax=cancel placement / fire projectile, by=rotate ghost
 func _on_right_button_pressed(button_name: String) -> void:
 	if _is_locked:
 		return
 	if _ghost_tower:
 		if button_name == "trigger_click":
 			_confirm_placement()
-		if button_name == "ax_button" or button_name == "by_button":
+		elif button_name == "ax_button":
 			cancel_placement()
+		elif button_name == "by_button":
+			_rotate_ghost_tower()
 	else:
 		if button_name == "trigger_click":
-			if game_board:
+			# Pick up the tower the controller is pointing at, if any.
+			# Building.move() refunds the full invested cost and re-enters placement mode.
+			var pointed_tower := _get_pointed_tower()
+			if pointed_tower:
+				pointed_tower.move()
+			elif game_board:
 				game_board.hide_building_menu()
+		elif button_name == "ax_button":
+			_fire_mage_projectile()
+
+func _fire_mage_projectile() -> void:
+	var ray_origin := right_hand.global_position
+	var ray_dir := -right_hand.global_transform.basis.z.normalized()
+	var endpoint: Vector3
+	if is_instance_valid(_world_raycast) and _world_raycast.is_colliding():
+		endpoint = _world_raycast.get_collision_point()
+	else:
+		endpoint = ray_origin + ray_dir * fire_max_distance
+	endpoint += Vector3(
+		_rng.randf_range(-fire_endpoint_spread, fire_endpoint_spread),
+		0.0,
+		_rng.randf_range(-fire_endpoint_spread, fire_endpoint_spread),
+	)
+
+	# Use Area3D.new() + set_script() — Script.new() on the preloaded GDScript
+	# was throwing "Nonexistent function 'new' in base 'GDScript'" at runtime.
+	var proj := Area3D.new()
+	proj.set_script(load(PLAYER_MAGE_PROJECTILE_PATH))
+	if world_content_root:
+		world_content_root.add_child(proj)
+	else:
+		get_parent().add_child(proj)
+	proj.setup(ray_origin, endpoint)
 
 func start_placement(script_path: String, source_position: Vector3 = Vector3.INF) -> void:
 	cancel_placement()
@@ -210,7 +249,9 @@ func _update_ghost_position() -> void:
 	if hit_point != Vector3.INF:
 		_ghost_tower.global_position = hit_point
 		var valid = true
-		if terrain and terrain.get_path_distance(hit_point.x, hit_point.z) < tower_path_clearance:
+		if terrain and terrain.is_near_enemy_path(hit_point.x, hit_point.z, tower_path_clearance):
+			valid = false
+		if _is_in_spawn_no_build_zone(hit_point):
 			valid = false
 		_update_ghost_color(valid)
 	else:
@@ -251,7 +292,9 @@ func _confirm_placement() -> void:
 	if hit_point == Vector3.INF:
 		cancel_placement()
 		return
-	if terrain and terrain.get_path_distance(hit_point.x, hit_point.z) < tower_path_clearance:
+	if terrain and terrain.is_near_enemy_path(hit_point.x, hit_point.z, tower_path_clearance):
+		return
+	if _is_in_spawn_no_build_zone(hit_point):
 		return
 
 	var building_script = load(_placement_script) as Script
@@ -261,8 +304,6 @@ func _confirm_placement() -> void:
 	else:
 		get_parent().add_child(tower)
 	tower.place(hit_point, Vector3(0, _ghost_rotation.y, 0))
-	if terrain:
-		terrain.deflect_obstacle(hit_point.x, hit_point.z, 2.5, 8.0)
 
 	money -= _placement_cost
 	cancel_placement()
@@ -357,3 +398,29 @@ func _get_raycast_hit_point() -> Vector3:
 			return Vector3.INF
 		return _world_raycast.get_collision_point()
 	return Vector3.INF
+
+
+## Returns the Building the controller is currently pointing at, or null if not pointing at one.
+## Shares the world raycast (mask=1) — towers and terrain are on the same layer; closest hit wins.
+func _get_pointed_tower() -> Building:
+	if not is_instance_valid(_world_raycast) or not _world_raycast.is_colliding():
+		return null
+	var collider := _world_raycast.get_collider()
+	if collider is Building:
+		return collider as Building
+	return null
+
+
+## True if `pos` is within any enemy spawn's no-build radius. Uses XZ distance only so
+## elevation differences (player on a hill above a spawn) don't accidentally allow placement.
+func _is_in_spawn_no_build_zone(pos: Vector3) -> bool:
+	for spawn in get_tree().get_nodes_in_group("enemy_spawn"):
+		if not (spawn is Node3D):
+			continue
+		var sp := spawn as Node3D
+		var dx: float = pos.x - sp.global_position.x
+		var dz: float = pos.z - sp.global_position.z
+		var radius: float = sp.get("no_build_radius") if "no_build_radius" in sp else 0.0
+		if sqrt(dx * dx + dz * dz) < radius:
+			return true
+	return false

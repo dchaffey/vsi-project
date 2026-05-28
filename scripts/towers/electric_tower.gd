@@ -48,7 +48,7 @@ func _apply_level(level: int) -> void:
 		bolt_max_jumps = 4
 		bolt_chain_range = 15.0
 		_query_shape.radius = range_radius
-		_set_cone_model(8.0, 2.5, Color(0.2, 0.6, 1.0), 3.0)
+		_set_tower_model("res://assets/tesla__tower.glb", Vector3.ZERO)
 		return
 	# Level 1: faster fire, more damage, longer chain
 	range_radius = 45.0
@@ -57,27 +57,16 @@ func _apply_level(level: int) -> void:
 	bolt_max_jumps = 6
 	bolt_chain_range = 20.0
 	_query_shape.radius = range_radius
-	_set_cone_model(11.0, 3.0, Color(0.5, 0.9, 1.0), 5.0)
+	_set_tower_model("res://assets/tesla__tower.glb", Vector3.ZERO)
 
 
-func _set_cone_model(height: float, base_radius: float, color: Color, emission_energy: float) -> void:
-	# Build a procedural cone (CylinderMesh with top_radius=0) as the tower visual.
+func _set_tower_model(scene_path: String, local_position: Vector3) -> void:
+	var tower_scene: PackedScene = load(scene_path) as PackedScene
+	assert(tower_scene != null, "Electric tower scene missing: %s" % scene_path)
 	if is_instance_valid(_tower_model):
 		_tower_model.queue_free()
-	var mi := MeshInstance3D.new()
-	var mesh := CylinderMesh.new()
-	mesh.height = height
-	mesh.top_radius = 0.0
-	mesh.bottom_radius = base_radius
-	mi.mesh = mesh
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = color
-	mat.emission_enabled = true
-	mat.emission = color
-	mat.emission_energy_multiplier = emission_energy
-	mi.material_override = mat
-	mi.position = Vector3(0.0, height * 0.5, 0.0)  # base sits at y=0
-	_tower_model = mi
+	_tower_model = tower_scene.instantiate()
+	_tower_model.position = local_position
 	add_child(_tower_model)
 
 

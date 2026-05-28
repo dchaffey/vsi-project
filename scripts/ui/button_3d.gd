@@ -136,7 +136,9 @@ func _set_hovered(hovered: bool) -> void:
 
 func _on_visibility_changed() -> void:
 	# Pause physics-side input when hidden; the area can't accept ENTERED/PRESSED while invisible.
-	monitoring = visible
-	monitorable = visible
+	# Deferred — visibility can change mid-physics-signal (e.g. enemy death → wave button reveal
+	# while inside a body_entered callback), and Area3D blocks direct mutation during in/out signals.
+	set_deferred("monitoring", visible)
+	set_deferred("monitorable", visible)
 	if not visible and _is_hovered:
 		_set_hovered(false)

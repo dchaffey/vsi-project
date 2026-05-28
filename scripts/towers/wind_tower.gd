@@ -99,9 +99,11 @@ func _physics_process(delta: float) -> void:
 
 	if _blast_active_time < blast_duration:
 		_set_blast_visual_active(true)
-		var enemies = EnemyQuery.get_enemies_in_shape(self, _blast_query_shape, _get_blast_shape_transform())
+		var shape_xform := _get_blast_shape_transform()
+		var enemies = EnemyQuery.get_enemies_in_shape(self, _blast_query_shape, shape_xform)
 		if not enemies.is_empty():
 			_apply_wind_to_enemies(enemies)
+		_apply_wind_to_boulders(shape_xform)
 		_blast_active_time += delta
 	else:
 		_set_blast_visual_active(false)
@@ -132,3 +134,26 @@ func _apply_wind_to_enemies(enemies: Array) -> void:
 	for enemy in enemies:
 		if enemy.has_method("apply_impulse"):
 			enemy.apply_impulse(world_wind_direction, wind_force)
+
+
+## Pushes player boulders that are inside the blast volume. Uses a separate physics
+## shape query against layer 8 (Boulder) because EnemyQuery's identity check would
+## misclassify the boulder via its inherited RigidBody3D.apply_impulse. Per-frame
+## central impulse mirrors the enemy wind behavior — boulder mass (80kg) keeps the
+## velocity delta modest, so the effect ramps over the 0.3s blast just like enemies.
+func _apply_wind_to_boulders(shape_xform: Transform3D) -> void:
+	var query := PhysicsShapeQueryParameters3D.new()
+	query.shape = _blast_query_shape
+	query.transform = shape_xform
+	query.collision_mask = 8  # Layer 4 = Boulder
+	query.collide_with_bodies = true
+	query.collide_with_areas = false
+	var results := get_world_3d().direct_space_state.intersect_shape(query, 16)
+	if results.is_empty():
+		return
+	var world_wind_direction: Vector3 = global_basis * wind_direction
+	var impulse := world_wind_direction.normalized() * wind_force
+	for r in results:
+		var body = r.collider
+		if body is RigidBody3D:
+			body.apply_central_impulse(impulse)

@@ -1,0 +1,19 @@
+[remap]
+
+importer="csv_translation"
+type="Translation"
+uid="uid://bdh7w4gprvoem"
+
+[deps]
+
+files=["res://assets/levels/lvl2.Enemy Count.translation", "res://assets/levels/lvl2.Spawn Rate.translation"]
+
+source_file="res://assets/levels/lvl2.csv"
+dest_files=["res://assets/levels/lvl2.Enemy Count.translation", "res://assets/levels/lvl2.Spawn Rate.translation"]
+
+[params]
+
+compress=1
+delimiter=0
+unescape_keys=false
+unescape_translations=true

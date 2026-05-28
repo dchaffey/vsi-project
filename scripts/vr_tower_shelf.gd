@@ -46,8 +46,11 @@ func _setup_shelf() -> void:
 
 		var x_pos = (c - (MAX_COLUMNS - 1) / 2.0) * spacing
 		var y_pos = r * vertical_spacing  # row 0 at bottom, additional rows stack upward
-		
+
 		_create_tower_option(towers[i], Vector3(x_pos, y_pos, 0))
+
+	var max_row := floori(float(max(total - 1, 0)) / float(MAX_COLUMNS))
+	_build_controls_label((max_row + 1) * vertical_spacing + 1.0)
 
 func _create_tower_option(info: Dictionary, pos: Vector3) -> void:
 	var option_root = Node3D.new()
@@ -112,3 +115,26 @@ func _create_tower_option(info: Dictionary, pos: Vector3) -> void:
 	# Animation: spin the tower
 	var tween = create_tween().set_loops()
 	tween.tween_property(tower_preview, "rotation:y", TAU, 4.0).from(0.0)
+
+func _build_controls_label(y: float) -> void:
+	var label := Label3D.new()
+	label.text = (
+		"— CONTROLS —\n\n" +
+		"LEFT HAND\n" +
+		"X             Recenter\n" +
+		"Y             Pull enemies (3s)\n" +
+		"Trigger       Rotate tower (placing)\n\n" +
+		"RIGHT HAND\n" +
+		"Trigger       Place tower / Pick up tower\n" +
+		"A             Fire spell / Cancel placement\n" +
+		"B             Rotate tower (placing)\n" +
+		"Laser         Select tower / Press buttons"
+	)
+	label.position = Vector3(0.0, y, 0.0)
+	label.pixel_size = 0.005
+	label.font_size = 32
+	label.outline_size = 6
+	label.modulate = Color(0.85, 0.95, 1.0)
+	label.no_depth_test = true
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	add_child(label)

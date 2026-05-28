@@ -1,4 +1,4 @@
-@tool
+﻿@tool
 extends StaticBody3D
 
 ## Terrain dimensions (in vertices). The mesh will be (width-1) x (depth-1) quads.
@@ -20,7 +20,7 @@ extends StaticBody3D
 	set(v):
 		max_height = v
 		_queue_rebuild()
-## Noise frequency — lower values produce smoother, broader hills
+## Noise frequency â€” lower values produce smoother, broader hills
 @export var noise_frequency: float = 0.02:
 	set(v):
 		noise_frequency = v
@@ -52,7 +52,7 @@ extends StaticBody3D
 	set(v):
 		road_width = v
 		_queue_rebuild()
-## Steepness cost exponent — higher values penalise slopes more aggressively
+## Steepness cost exponent â€” higher values penalise slopes more aggressively
 @export var steepness_exponent: float = 10.0:
 	set(v):
 		steepness_exponent = v
@@ -97,25 +97,15 @@ extends StaticBody3D
 		tree_scale_max = v
 		_queue_rebuild()
 
-signal flow_field_changed
-
 var height_map: Array = [] # 2D array [x][z] of floats
 var _is_ready := false
 # Per-vertex road blend factor [x][z] in [0, 1]. 1 = full road, 0 = terrain.
 var _road_blend: Array = []
 var _rebuild_queued := false
 
-## Flow field for enemy navigation. Computed once during initial build.
-## [x][z] of Vector2 — normalized direction to move toward the nearest road,
-## then along the road toward the goal. Zero vector if no paths exist.
-var flow_field: Array = []
-## Distance-to-nearest-road field. [x][z] of float. 0.0 = on the road.
-## INF if no paths exist.
-var path_distance: Array = []
-## Whether the flow field has been computed. Once true, rebuilds skip recomputation.
-var _flow_field_built := false
-## Walkability grid. False for cells blocked by placed obstacles.
-var _walkable: Array = []  # [x][z] of bool
+## World-space waypoint arrays for each road path, populated during _rebuild().
+## Used by enemies for waypoint-following navigation.
+var _road_paths_world: Array = []  # Array of Array[Vector3]
 
 var foliage_types: Array[FoliageType] = []
 var _foliage_prob_ranges: Array = []  # Array of [start, end] ranges for each foliage type
@@ -144,7 +134,7 @@ func _queue_rebuild() -> void:
 
 ## Regenerates the height map, mesh, and collision shape.
 ## Updates the existing MeshInstance3D and CollisionShape3D children that live
-## in the .tscn — no add_child() needed, so the editor viewport sees the mesh.
+## in the .tscn â€” no add_child() needed, so the editor viewport sees the mesh.
 func _rebuild() -> void:
 	if not _is_ready and not Engine.is_editor_hint():
 		return
@@ -163,9 +153,15 @@ func _rebuild() -> void:
 			_stamp_roads(height_map, paths)
 		print("Roads: %d path(s) found from %d start(s)." % [paths.size(), road_starts.size()])
 
-	# --- Flow field (computed once, never recomputed) ---
-	if not _flow_field_built:
-		_build_flow_field(paths)
+	# --- Store paths as world-space waypoints for enemy navigation ---
+	_road_paths_world = []
+	var _half_w: float = (terrain_width - 1) * cell_size * 0.5
+	var _half_d: float = (terrain_depth - 1) * cell_size * 0.5
+	for path in paths:
+		var world_path: Array = []
+		for grid_pt: Vector2i in path:
+			world_path.append(_grid_to_world(grid_pt, _half_w, _half_d))
+		_road_paths_world.append(world_path)
 
 	var array_mesh := _create_terrain_mesh(height_map)
 	if not array_mesh:
@@ -205,7 +201,7 @@ func _extract_mesh_from_scene(scene: PackedScene) -> Mesh:
 	return null
 
 func _spawn_foliage() -> void:
-	# Clean up all MultiMeshInstance3D children — catches both runtime-created
+	# Clean up all MultiMeshInstance3D children â€” catches both runtime-created
 	# nodes (in _terrain_foliage group) and stale baked nodes from the scene file.
 	for child in get_children():
 		if child is MultiMeshInstance3D:
@@ -245,9 +241,9 @@ func _spawn_foliage() -> void:
 	var total_cells = (terrain_width - 1) * (terrain_depth - 1)
 	var max_attempts = int(total_cells * foliage_density * 0.4)
 
-	# Margin in grid cells — keeps foliage inside the walls
+	# Margin in grid cells â€” keeps foliage inside the walls
 	var margin = 2.0
-	# Path exclusion radius in grid cells — keeps foliage off enemy walkways
+	# Path exclusion radius in grid cells â€” keeps foliage off enemy walkways
 	var path_clearance: float = 1.5
 
 	for attempt in range(max_attempts):
@@ -257,10 +253,10 @@ func _spawn_foliage() -> void:
 		var wx = x * cell_size - half_w
 		var wz = z * cell_size - half_d
 
-		# Skip if on or near a road (blend) or enemy path (distance)
+		# Skip if on or near a road (blend) or enemy path (waypoints)
 		if get_road_blend_at(wx, wz) > 0.05:
 			continue
-		if get_path_distance(wx, wz) < path_clearance:
+		if _is_near_path(wx, wz, path_clearance * cell_size):
 			continue
 		
 		var height = get_height_at(wx, wz)
@@ -577,7 +573,7 @@ func _in_bounds(p: Vector2i) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Road stamping — flatten terrain along paths with Gaussian falloff
+# Road stamping â€” flatten terrain along paths with Gaussian falloff
 # ---------------------------------------------------------------------------
 
 ## Stamps all road paths into the height map and populates _road_blend.
@@ -585,10 +581,10 @@ func _in_bounds(p: Vector2i) -> bool:
 ## and flattened. Gaussian falloff blends road edges into the surrounding terrain.
 func _stamp_roads(map: Array, paths: Array) -> void:
 	var half_width: float = road_width * 0.5
-	# Sigma for Gaussian falloff — controls how quickly the road blends out
+	# Sigma for Gaussian falloff â€” controls how quickly the road blends out
 	var sigma: float = road_width * 0.35
 	var two_sigma_sq: float = 2.0 * sigma * sigma
-	# Influence radius — extend a bit beyond half_width for the blend region
+	# Influence radius â€” extend a bit beyond half_width for the blend region
 	var influence_radius: float = half_width + sigma * 2.0
 	var influence_radius_sq: float = influence_radius * influence_radius
 
@@ -644,7 +640,7 @@ func _stamp_roads(map: Array, paths: Array) -> void:
 				# Gaussian blend factor: 1.0 at center, fading to 0 at edges
 				var blend: float
 				if dist <= half_width * 0.5:
-					# Core of the road — fully flat
+					# Core of the road â€” fully flat
 					blend = 1.0
 				else:
 					# Falloff region
@@ -683,368 +679,6 @@ func _smooth_path_heights(map: Array, path: Array) -> PackedFloat64Array:
 
 	return smoothed
 
-
-# ---------------------------------------------------------------------------
-# Flow field — precomputed navigation for enemies
-# ---------------------------------------------------------------------------
-
-## Build the flow field and distance field from the computed road paths.
-## This is called once during the first _rebuild() and never recomputed.
-##
-## Algorithm:
-##   1. Walk each path from start→goal, recording per-cell flow direction
-##      (pointing toward the goal along the path) and distance-to-goal.
-##   2. Expand path cells outward by road_width/2 so the entire road surface
-##      is marked as "on-road" (path_distance = 0).
-##   3. BFS flood-fill from all road cells outward. Every off-road cell gets
-##      a direction vector pointing toward its nearest road cell, and a
-##      distance value equal to the grid-step distance to that road cell.
-##
-## The result is two grids:
-##   flow_field [x][z] — Vector2 direction to follow
-##   path_distance [x][z] — 0.0 on road, >0 off road
-func _build_flow_field(paths: Array) -> void:
-	# Initialise grids
-	flow_field = []
-	path_distance = []
-	_walkable = []
-	for x in range(terrain_width):
-		var flow_row: Array = []
-		flow_row.resize(terrain_depth)
-		var dist_row: Array = []
-		dist_row.resize(terrain_depth)
-		var walk_row: Array = []
-		walk_row.resize(terrain_depth)
-		for z in range(terrain_depth):
-			flow_row[z] = Vector2.ZERO
-			dist_row[z] = INF
-			walk_row[z] = true
-		flow_field.append(flow_row)
-		path_distance.append(dist_row)
-		_walkable.append(walk_row)
-
-	if paths.size() == 0:
-		print("Flow field: no paths provided, field left empty.")
-		return
-
-	# ----- Step 1: Mark path centerline cells with goal-directed flow -----
-	# For each path cell, store the direction toward the goal (next cell in path)
-	# and the distance-to-goal along the path. When paths overlap, keep the
-	# shorter distance-to-goal.
-	# We also store the goal-distance separately for the on-road BFS seeding.
-	var goal_dist_map: Dictionary = {}  # Vector2i -> float (distance to goal along path)
-
-	for path in paths:
-		if path.size() < 2:
-			continue
-
-		# Compute cumulative distance from goal backward along the path.
-		# path[0] = start, path[-1] = goal
-		var cum_dist := PackedFloat64Array()
-		cum_dist.resize(path.size())
-		cum_dist[path.size() - 1] = 0.0
-		for i in range(path.size() - 2, -1, -1):
-			var dx: float = float(path[i + 1].x - path[i].x)
-			var dz: float = float(path[i + 1].y - path[i].y)
-			var seg_len: float = sqrt(dx * dx + dz * dz)
-			cum_dist[i] = cum_dist[i + 1] + seg_len
-
-		for i in range(path.size()):
-			var cell: Vector2i = path[i]
-			var d_to_goal: float = cum_dist[i]
-
-			# Only overwrite if this path offers a shorter route to goal
-			if not goal_dist_map.has(cell) or d_to_goal < goal_dist_map[cell]:
-				goal_dist_map[cell] = d_to_goal
-
-				# Direction: point toward next cell in path (toward goal)
-				var dir := Vector2.ZERO
-				if i < path.size() - 1:
-					var next: Vector2i = path[i + 1]
-					dir = Vector2(float(next.x - cell.x), float(next.y - cell.y)).normalized()
-				elif i > 0:
-					# Goal cell: continue in the direction we arrived from
-					var prev: Vector2i = path[i - 1]
-					dir = Vector2(float(cell.x - prev.x), float(cell.y - prev.y)).normalized()
-
-				flow_field[cell.x][cell.y] = dir
-				path_distance[cell.x][cell.y] = 0.0
-
-	# ----- Step 2: Expand road surface (half-width around centerline) -----
-	# BFS from centerline cells outward up to road_width/2 cells.
-	# These cells are "on-road" (path_distance = 0) and inherit the flow
-	# direction of their nearest centerline cell.
-	var half_w_cells: float = road_width * 0.5
-	var road_queue: Array = []  # [Vector2i cell, float dist_from_center, Vector2 flow_dir, float goal_dist]
-	for cell in goal_dist_map:
-		road_queue.append([cell, 0.0, flow_field[cell.x][cell.y], goal_dist_map[cell]])
-
-	var cardinal_dirs := [
-		Vector2i(-1, 0), Vector2i(1, 0), Vector2i(0, -1), Vector2i(0, 1),
-	]
-	var diagonal_dirs := [
-		Vector2i(-1, -1), Vector2i(-1, 1), Vector2i(1, -1), Vector2i(1, 1),
-	]
-	var all_dirs := cardinal_dirs + diagonal_dirs
-
-	# Track which cells have been claimed by road expansion (separate from
-	# centerline so we don't overwrite centerline cells with worse data).
-	var road_visited: Dictionary = {}
-	for cell in goal_dist_map:
-		road_visited[cell] = true
-
-	var qi := 0
-	while qi < road_queue.size():
-		var entry: Array = road_queue[qi]
-		qi += 1
-		var cell: Vector2i = entry[0]
-		var dist_from_center: float = entry[1]
-		var inherited_flow: Vector2 = entry[2]
-		var inherited_goal_dist: float = entry[3]
-
-		for dir in all_dirs:
-			var nb: Vector2i = cell + dir
-			if not _in_bounds(nb) or road_visited.has(nb):
-				continue
-
-			var step: float = 1.0 if (dir.x == 0 or dir.y == 0) else 1.41421356
-			var new_dist: float = dist_from_center + step
-			if new_dist > half_w_cells:
-				continue
-
-			road_visited[nb] = true
-			flow_field[nb.x][nb.y] = inherited_flow
-			path_distance[nb.x][nb.y] = 0.0
-			road_queue.append([nb, new_dist, inherited_flow, inherited_goal_dist])
-
-	# ----- Step 3: BFS flood-fill for off-road cells -----
-	# Seed the BFS with all road cells (path_distance == 0). Every off-road
-	# cell gets a flow direction pointing toward its nearest road cell.
-	var bfs_queue: Array = []  # [Vector2i cell]
-	for x in range(terrain_width):
-		for z in range(terrain_depth):
-			if path_distance[x][z] == 0.0:
-				bfs_queue.append(Vector2i(x, z))
-
-	var bi := 0
-	while bi < bfs_queue.size():
-		var cell: Vector2i = bfs_queue[bi]
-		bi += 1
-		var current_dist: float = path_distance[cell.x][cell.y]
-
-		for dir in all_dirs:
-			var nb: Vector2i = cell + dir
-			if not _in_bounds(nb):
-				continue
-
-			var step: float = 1.0 if (dir.x == 0 or dir.y == 0) else 1.41421356
-			var new_dist: float = current_dist + step
-
-			if new_dist < path_distance[nb.x][nb.y]:
-				path_distance[nb.x][nb.y] = new_dist
-				# Direction: point from nb toward cell (i.e., toward the road)
-				flow_field[nb.x][nb.y] = Vector2(float(cell.x - nb.x), float(cell.y - nb.y)).normalized()
-				bfs_queue.append(nb)
-
-	_flow_field_built = true
-	print("Flow field built (%dx%d, %d road cells, %d total cells)." % [
-		terrain_width, terrain_depth, road_visited.size(), terrain_width * terrain_depth])
-
-
-# ---------------------------------------------------------------------------
-# Flow field queries — public API for enemies / AI
-# ---------------------------------------------------------------------------
-
-## Convert world coordinates to continuous grid coordinates, clamped to bounds.
-## Returns Vector2(gx, gz). Shared by all world→grid query helpers.
-func _world_to_grid(wx: float, wz: float) -> Vector2:
-	var half_w: float = (terrain_width - 1) * cell_size * 0.5
-	var half_d: float = (terrain_depth - 1) * cell_size * 0.5
-	var gx: float = clampf((wx + half_w) / cell_size, 0.0, float(terrain_width - 1))
-	var gz: float = clampf((wz + half_d) / cell_size, 0.0, float(terrain_depth - 1))
-	return Vector2(gx, gz)
-
-
-## Returns the flow direction at a world-space (wx, wz) position.
-## The returned Vector2 is a normalised direction in grid space (x, z).
-## To use as a 3D velocity: Vector3(dir.x, 0, dir.y).normalized() * speed.
-## Returns Vector2.ZERO if the flow field has not been built.
-func get_flow_direction(wx: float, wz: float) -> Vector2:
-	if flow_field.size() == 0:
-		return Vector2.ZERO
-
-	var g := _world_to_grid(wx, wz)
-	var x0 := mini(int(g.x), terrain_width - 2)
-	var z0 := mini(int(g.y), terrain_depth - 2)
-	var x1 := x0 + 1
-	var z1 := z0 + 1
-	var fx: float = g.x - float(x0)
-	var fz: float = g.y - float(z0)
-
-	# Bilinear interpolation of the flow vectors
-	var f00: Vector2 = flow_field[x0][z0]
-	var f10: Vector2 = flow_field[x1][z0]
-	var f01: Vector2 = flow_field[x0][z1]
-	var f11: Vector2 = flow_field[x1][z1]
-
-	var flow := f00 * (1.0 - fx) * (1.0 - fz) \
-			  + f10 * fx * (1.0 - fz) \
-			  + f01 * (1.0 - fx) * fz \
-			  + f11 * fx * fz
-
-	return flow.normalized() if flow.length_squared() > 0.0001 else Vector2.ZERO
-
-
-## Returns the interpolated distance to the nearest road at a world-space
-## (wx, wz) position. 0.0 means on the road. Units are in grid cells.
-## Returns INF if the flow field has not been built.
-func get_path_distance(wx: float, wz: float) -> float:
-	if path_distance.size() == 0:
-		return INF
-
-	var g := _world_to_grid(wx, wz)
-	var x0 := mini(int(g.x), terrain_width - 2)
-	var z0 := mini(int(g.y), terrain_depth - 2)
-	var x1 := x0 + 1
-	var z1 := z0 + 1
-	var fx: float = g.x - float(x0)
-	var fz: float = g.y - float(z0)
-
-	var d00: float = path_distance[x0][z0]
-	var d10: float = path_distance[x1][z0]
-	var d01: float = path_distance[x0][z1]
-	var d11: float = path_distance[x1][z1]
-
-	return d00 * (1.0 - fx) * (1.0 - fz) \
-		 + d10 * fx * (1.0 - fz) \
-		 + d01 * (1.0 - fx) * fz \
-		 + d11 * fx * fz
-
-
-## Returns true if the world-space (wx, wz) position is on or very near a road.
-## Uses a small threshold (0.5 grid cells) to account for interpolation.
-func is_on_road(wx: float, wz: float) -> bool:
-	return get_path_distance(wx, wz) < 0.5
-
-
-## Locally patches the flow field around a placed obstacle using proper
-## invalidation + re-propagation so the "shadow" behind the obstacle is
-## correctly rerouted rather than left pointing into a wall.
-func deflect_obstacle(world_x: float, world_z: float, inner_radius: float, _outer_radius: float) -> void:
-	if flow_field.size() == 0:
-		return
-
-	var all_dirs := [
-		Vector2i(-1, 0), Vector2i(1, 0), Vector2i(0, -1), Vector2i(0, 1),
-		Vector2i(-1, -1), Vector2i(-1, 1), Vector2i(1, -1), Vector2i(1, 1),
-	]
-
-	var half_w: float = (terrain_width - 1) * cell_size * 0.5
-	var half_d: float = (terrain_depth - 1) * cell_size * 0.5
-	var g := _world_to_grid(world_x, world_z)
-	var cx := int(round(g.x))
-	var cz := int(round(g.y))
-	var grid_r := int(ceil(inner_radius / cell_size)) + 1
-
-	# ---- Step 1: Place obstacle, collect immediate dependents ----
-	var invalidation_queue: Array[Vector2i] = []
-	var in_queue: Dictionary = {}
-
-	for dx in range(-grid_r, grid_r + 1):
-		for dz in range(-grid_r, grid_r + 1):
-			var gx := cx + dx
-			var gz := cz + dz
-			if not _in_bounds(Vector2i(gx, gz)):
-				continue
-			var cell_wx: float = gx * cell_size - half_w
-			var cell_wz: float = gz * cell_size - half_d
-			var dist: float = Vector2(cell_wx - world_x, cell_wz - world_z).length()
-			if dist > inner_radius:
-				continue
-			# Road cells are immovable anchors — never block them
-			if path_distance[gx][gz] == 0.0:
-				continue
-
-			_walkable[gx][gz] = false
-			flow_field[gx][gz] = Vector2.ZERO
-			path_distance[gx][gz] = INF
-
-			# Any walkable neighbour whose flow was pointing INTO this cell
-			# now has a broken path — it needs re-evaluation.
-			for dir in all_dirs:
-				var nb := Vector2i(gx + dir.x, gz + dir.y)
-				if not _in_bounds(nb) or not _walkable[nb.x][nb.y]:
-					continue
-				var expected := Vector2(float(gx - nb.x), float(gz - nb.y)).normalized()
-				if flow_field[nb.x][nb.y].dot(expected) > 0.9 and not in_queue.has(nb):
-					invalidation_queue.append(nb)
-					in_queue[nb] = true
-
-	# ---- Step 2: Ripple invalidation through the shadow ----
-	var broken_cells: Array[Vector2i] = []
-	var qi := 0
-	while qi < invalidation_queue.size():
-		var cell: Vector2i = invalidation_queue[qi]
-		qi += 1
-
-		# Skip if already invalidated (obstacle cell) or a road anchor
-		if not _walkable[cell.x][cell.y] or path_distance[cell.x][cell.y] == 0.0:
-			continue
-
-		path_distance[cell.x][cell.y] = INF
-		flow_field[cell.x][cell.y] = Vector2.ZERO
-		broken_cells.append(cell)
-
-		for dir in all_dirs:
-			var nb := Vector2i(cell.x + dir.x, cell.y + dir.y)
-			if not _in_bounds(nb) or not _walkable[nb.x][nb.y]:
-				continue
-			if path_distance[nb.x][nb.y] == 0.0:
-				continue  # Road anchor — never invalidate
-			var expected := Vector2(float(cell.x - nb.x), float(cell.y - nb.y)).normalized()
-			if flow_field[nb.x][nb.y].dot(expected) > 0.9 and not in_queue.has(nb):
-				invalidation_queue.append(nb)
-				in_queue[nb] = true
-
-	# ---- Step 3: Re-propagate from the valid perimeter ----
-	# Use a plain array as a BFS queue (costs are 1 or sqrt(2) — consistent
-	# ordering from the perimeter is enough to get correct distances).
-	var prop_queue: Array[Vector2i] = []
-	var prop_in_queue: Dictionary = {}
-
-	for cell in broken_cells:
-		for dir in all_dirs:
-			var nb := Vector2i(cell.x + dir.x, cell.y + dir.y)
-			if not _in_bounds(nb) or not _walkable[nb.x][nb.y]:
-				continue
-			if path_distance[nb.x][nb.y] == INF:
-				continue  # Still broken — not a valid seed
-			if not prop_in_queue.has(nb):
-				prop_queue.append(nb)
-				prop_in_queue[nb] = true
-
-	var pi := 0
-	while pi < prop_queue.size():
-		var cell: Vector2i = prop_queue[pi]
-		pi += 1
-		var current_dist: float = path_distance[cell.x][cell.y]
-
-		for dir in all_dirs:
-			var nb := Vector2i(cell.x + dir.x, cell.y + dir.y)
-			if not _in_bounds(nb) or not _walkable[nb.x][nb.y]:
-				continue
-			var step: float = 1.0 if (dir.x == 0 or dir.y == 0) else 1.41421356
-			var new_dist: float = current_dist + step
-			if new_dist < path_distance[nb.x][nb.y]:
-				path_distance[nb.x][nb.y] = new_dist
-				flow_field[nb.x][nb.y] = Vector2(float(cell.x - nb.x), float(cell.y - nb.y)).normalized()
-				if not prop_in_queue.has(nb):
-					prop_queue.append(nb)
-					prop_in_queue[nb] = true
-
-	flow_field_changed.emit()
-
-
 ## Returns the world-space position of the road goal (Vector3, Y = terrain height).
 func get_goal_world_position() -> Vector3:
 	var half_w: float = (terrain_width - 1) * cell_size * 0.5
@@ -1061,6 +695,65 @@ func get_start_world_positions() -> Array:
 		if _in_bounds(start):
 			positions.append(_grid_to_world(start, half_w, half_d))
 	return positions
+
+
+## Returns the world-space waypoint arrays for all computed road paths.
+## Each element is an Array[Vector3]. Used by enemy_spawn to assign paths to enemies.
+func get_road_paths_world() -> Array:
+	return _road_paths_world
+
+
+## Runs A* from `from_world` back to the nearest point on path `path_idx`.
+## Returns a world-space Array[Vector3] for the enemy to follow as a rejoin path.
+func find_rejoin_path(from_world: Vector3, path_idx: int) -> Array:
+	if path_idx < 0 or path_idx >= _road_paths_world.size():
+		return []
+	if _road_paths_world[path_idx].size() == 0:
+		return []
+
+	var half_w := (terrain_width - 1) * cell_size * 0.5
+	var half_d := (terrain_depth - 1) * cell_size * 0.5
+
+	# Convert from_world to the nearest grid cell
+	var gx := clampi(int(round((from_world.x + half_w) / cell_size)), 0, terrain_width - 1)
+	var gz := clampi(int(round((from_world.z + half_d) / cell_size)), 0, terrain_depth - 1)
+	var start_grid := Vector2i(gx, gz)
+
+	# Find the nearest waypoint on the assigned path (absolute nearest in world space)
+	var best_dist_sq := INF
+	var best_goal := road_goal
+	for wp: Vector3 in _road_paths_world[path_idx]:
+		var dx := wp.x - from_world.x
+		var dz := wp.z - from_world.z
+		var dsq := dx * dx + dz * dz
+		if dsq < best_dist_sq:
+			best_dist_sq = dsq
+			var wgx := clampi(int(round((wp.x + half_w) / cell_size)), 0, terrain_width - 1)
+			var wgz := clampi(int(round((wp.z + half_d) / cell_size)), 0, terrain_depth - 1)
+			best_goal = Vector2i(wgx, wgz)
+
+	var grid_path := _find_path(start_grid, best_goal, height_map)
+	var world_path: Array = []
+	for gpt: Vector2i in grid_path:
+		world_path.append(_grid_to_world(gpt, half_w, half_d))
+	return world_path
+
+
+## Public helper for tower placement — returns true if (wx, wz) is within
+## `clearance_world` world units of any enemy path waypoint.
+func is_near_enemy_path(wx: float, wz: float, clearance_world: float) -> bool:
+	return _is_near_path(wx, wz, clearance_world)
+
+
+func _is_near_path(wx: float, wz: float, clearance_world: float) -> bool:
+	var csq := clearance_world * clearance_world
+	for path in _road_paths_world:
+		for pt: Vector3 in path:
+			var dx := wx - pt.x
+			var dz := wz - pt.z
+			if dx * dx + dz * dz < csq:
+				return true
+	return false
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 extends CharacterBody3D
 
-## Enemy that walks along the terrain flow field and ragdolls when hit hard.
+## Enemy that walks along pre-computed A* waypoints and ragdolls when hit hard.
 ## Uses kinematic movement (move_and_slide) so it cannot tunnel into terrain.
 
 enum State { PATHING, RAGDOLL, RECOVERING, DEAD }
@@ -8,7 +8,7 @@ enum State { PATHING, RAGDOLL, RECOVERING, DEAD }
 ## Emitted when the enemy dies — wave manager / spawner listens for rewards.
 signal died(max_hp: float)
 
-## Terrain reference — provides flow field and height queries. Set by spawner.
+## Terrain reference — provides height queries and rejoin-path A*. Set by spawner.
 var terrain: StaticBody3D
 ## Defence objective — enemies die/respawn when they reach it. Set by spawner.
 var defence_objective: Area3D
@@ -45,10 +45,13 @@ var _recovering_timer: float = 0.0
 var material: StandardMaterial3D
 ## Seconds remaining on damage flash — while > 0, the material stays red.
 var _flash_timer: float = 0.0
+## True while a VR controller raycast is pointing at this enemy — shows cyan highlight.
+var _is_targeted: bool = false
 
-## Full-HP and near-death albedo colors for the damage tint gradient.
-const _COLOR_FULL_HP := Color(0.85, 0.85, 0.85)
-const _COLOR_LOW_HP := Color(1.0, 0.4, 0.0)
+## Overlay colors for the damage tint gradient — alpha 0 at full HP (invisible), opaque red at death.
+const _COLOR_FULL_HP  := Color(1.0, 0.0, 0.0, 0.0)
+const _COLOR_LOW_HP   := Color(1.0, 0.2, 0.0, 0.7)
+const _COLOR_TARGETED := Color(0.0, 1.0, 1.0, 0.6)
 
 ## Global gravity magnitude — read from ProjectSettings to match world.gd's setting.
 var GRAVITY: float = ProjectSettings.get_setting("physics/3d/default_gravity")
@@ -67,7 +70,7 @@ const IMPULSE_DAMAGE_SCALE := 1.0
 ## Manually-integrated angular velocity driving visual tumble while ragdolled.
 var _angular_velocity: Vector3 = Vector3.ZERO
 
-## Wander: slowly-drifting yaw offset applied to the flow direction so the crowd isn't in a straight line.
+## Wander: slowly-drifting yaw offset applied to the movement direction so the crowd isn't in a straight line.
 var _wander_angle: float = 0.0
 var _wander_target: float = 0.0
 var _wander_timer: float = 0.0
@@ -77,17 +80,44 @@ var _stuck_timer: float = 0.0
 ## Cooldown after a jump to prevent rapid re-jumping.
 var _jump_cooldown: float = 0.0
 
+# ---------------------------------------------------------------------------
+# Waypoint navigation
+# ---------------------------------------------------------------------------
+
+## Index into terrain.get_road_paths_world() identifying which path this enemy follows.
+var _path_idx: int = 0
+## Laterally-offset world-space waypoints assigned at spawn.
+var _waypoints: Array = []  # Array[Vector3]
+## Index of the next waypoint to steer toward.
+var _waypoint_idx: int = 0
+
+## XZ distance at which we consider a waypoint reached and advance to the next.
+const _WAYPOINT_REACH_DIST: float = 1.8
+
+## Rejoin path — short A* path computed after ragdoll to return the enemy to its main path.
+var _rejoin_waypoints: Array = []  # Array[Vector3]
+var _rejoin_idx: int = 0
+## Countdown after ragdoll ends before A* is triggered (absorbs rapid re-hits).
+var _rejoin_delay: float = 0.0
+const _REJOIN_DELAY: float = 0.8
+
+
+## Called by enemy_spawn after creating this enemy.
+func assign_path(waypoints: Array, path_idx: int) -> void:
+	_waypoints = waypoints
+	_path_idx = path_idx
+	_waypoint_idx = 0
+
 
 ## Wire up terrain queries and the defence-objective signal. Called once on add_child.
 func _ready() -> void:
 	_rng.randomize()
-	add_to_group("enemies")  # registers this unit for gameplay systems that query active enemies by group
+	add_to_group("enemies")
 	assert(terrain != null, "enemy.terrain must be set before add_child")
 	assert(defence_objective != null, "enemy.defence_objective must be set before add_child")
 	_start_positions = terrain.get_start_world_positions()
 	defence_objective.enemy_entered.connect(_on_defence_objective_entered)
 
-	# Fetch global gravity setting to match world.gd
 	GRAVITY = ProjectSettings.get_setting("physics/3d/default_gravity")
 
 	# 10% chance to spawn as a giant variant — double size, double HP.
@@ -98,8 +128,6 @@ func _ready() -> void:
 
 
 ## One-shot velocity kick. Used by explosions, projectile impacts, per-frame wind/suck calls.
-## If `magnitude` meets the ragdoll threshold, flips the enemy into RAGDOLL.
-## If `deal_damage` is true, applies HP damage proportional to magnitude.
 func apply_impulse(direction: Vector3, magnitude: float, deal_damage: bool = false) -> void:
 	if _state == State.DEAD:
 		return
@@ -114,8 +142,7 @@ func apply_impulse(direction: Vector3, magnitude: float, deal_damage: bool = fal
 			_flash_red()
 
 
-## Frame-rate-independent continuous force. Accumulated velocity can still tip the enemy into RAGDOLL.
-## Caller passes delta — magnitude is treated as units/sec², so integration is `v += dir * mag * delta`.
+## Frame-rate-independent continuous force.
 func apply_force(direction: Vector3, magnitude: float, delta: float) -> void:
 	if _state == State.DEAD:
 		return
@@ -140,7 +167,6 @@ func apply_dmg(amount: float) -> void:
 func _physics_process(delta: float) -> void:
 	assert(terrain != null)
 
-	# Safety hatch — if the enemy somehow falls out of the world, despawn it.
 	if global_position.y < -30.0:
 		_enter_dead()
 		queue_free()
@@ -158,39 +184,57 @@ func _physics_process(delta: float) -> void:
 
 	move_and_slide()
 
-	# Decay damage-flash tint back to the health-based color.
-	if _flash_timer > 0.0:
-		_flash_timer -= delta
-		if _flash_timer <= 0.0:
-			_update_color()
-	
-	# Decay damage-flash tint back to the health-based color.
 	if _flash_timer > 0.0:
 		_flash_timer -= delta
 		if _flash_timer <= 0.0:
 			_update_color()
 
 
-## PATHING: flow-field steering + gravity + stuck-detection jump.
+## PATHING: waypoint following + gravity + stuck-detection jump.
 func _process_pathing(delta: float) -> void:
 	velocity.y -= GRAVITY * delta
 
-	# Wander drift — randomized yaw offset with slow lerp toward a new target.
+	# Wander drift — randomized yaw offset lerped toward a new target.
 	_wander_timer -= delta
 	if _wander_timer <= 0.0:
-		_wander_target = _rng.randf_range(-0.4, 0.4)
+		_wander_target = _rng.randf_range(-0.3, 0.3)
 		_wander_timer = _rng.randf_range(0.8, 2.0)
 	_wander_angle = lerpf(_wander_angle, _wander_target, clampf(delta * 3.0, 0.0, 1.0))
 
-	# Flow-field steering — lerp horizontal velocity toward the desired direction.
-	var flow: Vector2 = terrain.get_flow_direction(global_position.x, global_position.z)
-	if flow != Vector2.ZERO:
-		var rotated := flow.rotated(_wander_angle)
-		var desired := Vector3(rotated.x, 0.0, rotated.y).normalized() * move_speed
-		velocity.x = lerpf(velocity.x, desired.x, clampf(delta * 5.0, 0.0, 1.0))
-		velocity.z = lerpf(velocity.z, desired.z, clampf(delta * 5.0, 0.0, 1.0))
+	# Rejoin delay countdown — triggered when recovering from ragdoll.
+	if _rejoin_delay > 0.0:
+		_rejoin_delay -= delta
+		if _rejoin_delay <= 0.0:
+			_start_rejoin()
 
-	# Stuck detection — hop if we've been blocked on the ground for a beat.
+	# Determine active waypoint list and index.
+	var active_wps: Array  = _rejoin_waypoints if _rejoin_waypoints.size() > 0 else _waypoints
+	var active_idx: int    = _rejoin_idx        if _rejoin_waypoints.size() > 0 else _waypoint_idx
+
+	if active_wps.size() > 0 and active_idx < active_wps.size():
+		var target: Vector3 = active_wps[active_idx]
+		var to_target := Vector2(target.x - global_position.x, target.z - global_position.z)
+		var dist_xz := to_target.length()
+
+		if dist_xz < _WAYPOINT_REACH_DIST:
+			# Reached — advance index.
+			if _rejoin_waypoints.size() > 0:
+				_rejoin_idx += 1
+				if _rejoin_idx >= _rejoin_waypoints.size():
+					# Done rejoining: snap back to nearest main-path waypoint.
+					_waypoint_idx = _nearest_waypoint_idx()
+					_rejoin_waypoints = []
+					_rejoin_idx = 0
+			else:
+				_waypoint_idx = mini(_waypoint_idx + 1, _waypoints.size() - 1)
+		else:
+			# Steer toward waypoint with wander offset.
+			var flow := to_target.normalized().rotated(_wander_angle)
+			var desired := Vector3(flow.x, 0.0, flow.y) * move_speed
+			velocity.x = lerpf(velocity.x, desired.x, clampf(delta * 5.0, 0.0, 1.0))
+			velocity.z = lerpf(velocity.z, desired.z, clampf(delta * 5.0, 0.0, 1.0))
+
+	# Stuck detection — hop if blocked on the ground for long enough.
 	_jump_cooldown -= delta
 	var horiz: float = Vector2(velocity.x, velocity.z).length()
 	if horiz < move_speed * 0.2 and is_on_floor():
@@ -202,31 +246,33 @@ func _process_pathing(delta: float) -> void:
 	else:
 		_stuck_timer = 0.0
 
+	# Face the horizontal movement direction.
+	if horiz > 1.0:
+		var target_yaw: float = atan2(-velocity.x, -velocity.z)
+		rotation.y = lerp_angle(rotation.y, target_yaw, clampf(delta * 8.0, 0.0, 1.0))
+
 
 ## RAGDOLL: gravity + horizontal damping + manual angular integration for visual tumble.
 func _process_ragdoll(delta: float) -> void:
 	velocity.y -= GRAVITY * delta
 
-	# Damp horizontal velocity so the body comes to rest.
 	velocity.x = lerpf(velocity.x, 0.0, clampf(delta * 1.0, 0.0, 1.0))
 	velocity.z = lerpf(velocity.z, 0.0, clampf(delta * 1.0, 0.0, 1.0))
 
-	# Integrate the fake angular velocity and damp it.
 	if _angular_velocity.length_squared() > 0.0001:
 		var axis := _angular_velocity.normalized()
 		var angle := _angular_velocity.length() * delta
 		rotate(axis, angle)
 		_angular_velocity = _angular_velocity.lerp(Vector3.ZERO, clampf(delta * 1.5, 0.0, 1.0))
 
-	# Increment ragdoll timer and force recovery after maximum time to prevent infinite drifting.
 	_ragdoll_timer += delta
 	if _ragdoll_timer >= MAX_RAGDOLL_TIME:
 		_state = State.RECOVERING
 		_angular_velocity = Vector3.ZERO
 		_recovering_timer = 0.0
+		_rejoin_delay = _REJOIN_DELAY
 		return
 
-	# Settle check — on ground, low linear + angular speed, for 0.3s in a row.
 	var settled: bool = is_on_floor() \
 			and velocity.length() < 2.0 \
 			and _angular_velocity.length() < 0.5
@@ -235,6 +281,7 @@ func _process_ragdoll(delta: float) -> void:
 		if _settle_timer >= 0.3:
 			_state = State.RECOVERING
 			_recovering_timer = 0.0
+			_rejoin_delay = _REJOIN_DELAY
 	else:
 		_settle_timer = 0.0
 
@@ -242,37 +289,34 @@ func _process_ragdoll(delta: float) -> void:
 ## RECOVERING: slerp quaternion back to upright, then resume PATHING.
 func _process_recovering(delta: float) -> void:
 	velocity.y -= GRAVITY * delta
-	
-	# Damp horizontal velocity so enemy doesn't drift while recovering
+
 	velocity.x = lerpf(velocity.x, 0.0, clampf(delta * 2.0, 0.0, 1.0))
 	velocity.z = lerpf(velocity.z, 0.0, clampf(delta * 2.0, 0.0, 1.0))
-	
-	# Increment recovery timer and force PATHING after maximum time
+
 	_recovering_timer += delta
 	if _recovering_timer >= MAX_RECOVERING_TIME:
 		_state = State.PATHING
 		_angular_velocity = Vector3.ZERO
 		_ragdoll_timer = 0.0
+		_rejoin_delay = _REJOIN_DELAY
 		if has_meta("recovering_target_quat"):
 			remove_meta("recovering_target_quat")
 		return
 
-	# Store target quaternion when first entering RECOVERING state
 	if not has_meta("recovering_target_quat"):
-		# Target is upright (no X/Z rotation), preserve current Y rotation
 		var current_euler := quaternion.get_euler()
 		var target_quat := Quaternion.from_euler(Vector3(0.0, current_euler.y, 0.0))
 		set_meta("recovering_target_quat", target_quat)
-	
+
 	var target_quat: Quaternion = get_meta("recovering_target_quat")
 	quaternion = quaternion.slerp(target_quat, clampf(delta * 5.0, 0.0, 1.0))
 
-	# Check if we're close enough to the target orientation
 	if quaternion.dot(target_quat) > 0.99:
 		_state = State.PATHING
 		_angular_velocity = Vector3.ZERO
 		_ragdoll_timer = 0.0
 		_recovering_timer = 0.0
+		_rejoin_delay = _REJOIN_DELAY
 		remove_meta("recovering_target_quat")
 
 
@@ -294,11 +338,10 @@ func _enter_ragdoll() -> void:
 	_state = State.RAGDOLL
 	_settle_timer = 0.0
 	_ragdoll_timer = 0.0
-	
-	# Clear any recovery metadata
+
 	if has_meta("recovering_target_quat"):
 		remove_meta("recovering_target_quat")
-	
+
 	var spin_mag: float = clampf(velocity.length() * 0.2, 2.0, 8.0)
 	_angular_velocity = Vector3(
 		_rng.randf_range(-1.0, 1.0),
@@ -311,27 +354,40 @@ func _enter_ragdoll() -> void:
 func _enter_dead() -> void:
 	if _state == State.DEAD:
 		return
+	_is_targeted = false
 	hp = 0.0
 	_dead_timer = 0.0
 	_state = State.DEAD
 	if material:
-		material.albedo_color = Color(1.0, 0.0, 0.0)
+		material.albedo_color = Color(1.0, 0.0, 0.0, 1.0)
 	died.emit(max_hp)
 
 
-## Briefly tint red to signal damage; `_update_color` restores health tint when the timer expires.
+## Briefly tint red to signal damage.
 func _flash_red() -> void:
 	_flash_timer = 0.12
 	if material:
 		material.albedo_color = Color(1.0, 0.0, 0.0)
 
 
-## Repaint the material based on current HP — linear blend between full and low-HP colors.
+## Called by VR targeting system to show/hide the cyan target highlight.
+func set_targeted(targeted: bool) -> void:
+	if _is_targeted == targeted:
+		return
+	_is_targeted = targeted
+	if _flash_timer <= 0.0:
+		_update_color()
+
+
+## Repaint the material based on current HP or targeting state.
 func _update_color() -> void:
-	if material:
+	if not material:
+		return
+	if _is_targeted:
+		material.albedo_color = _COLOR_TARGETED
+	else:
 		var t := clampf(1.0 - hp / max_hp, 0.0, 1.0)
 		material.albedo_color = _COLOR_FULL_HP.lerp(_COLOR_LOW_HP, t)
-	pass
 
 
 ## Signal callback from the defence objective — kill or respawn when this enemy touches it.
@@ -352,7 +408,6 @@ func _respawn_at_start() -> void:
 	var start_pos: Vector3 = _start_positions[_rng.randi_range(0, _start_positions.size() - 1)]
 	global_position = start_pos + Vector3(0.0, 2.0, 0.0)
 
-	# Kill physics interpolation so the enemy doesn't streak across the level on respawn.
 	if has_method("reset_physics_interpolation"):
 		reset_physics_interpolation()
 
@@ -371,7 +426,39 @@ func _respawn_at_start() -> void:
 	_stuck_timer = 0.0
 	_jump_cooldown = 0.0
 	quaternion = Quaternion.IDENTITY
-	
-	# Clear any recovery metadata
+	_waypoint_idx = 0
+	_rejoin_waypoints = []
+	_rejoin_idx = 0
+	_rejoin_delay = 0.0
+
 	if has_meta("recovering_target_quat"):
 		remove_meta("recovering_target_quat")
+
+
+# ---------------------------------------------------------------------------
+# Waypoint helpers
+# ---------------------------------------------------------------------------
+
+## Returns the index of the waypoint in _waypoints closest to current position.
+func _nearest_waypoint_idx() -> int:
+	var best_dsq := INF
+	var best_i := _waypoint_idx
+	for i in range(_waypoints.size()):
+		var wp: Vector3 = _waypoints[i]
+		var dx := wp.x - global_position.x
+		var dz := wp.z - global_position.z
+		var dsq := dx * dx + dz * dz
+		if dsq < best_dsq:
+			best_dsq = dsq
+			best_i = i
+	return best_i
+
+
+## Ask the terrain for a short A* path back to the main route, then follow it.
+func _start_rejoin() -> void:
+	if terrain == null or _waypoints.size() == 0:
+		return
+	var world_path: Array = terrain.find_rejoin_path(global_position, _path_idx)
+	if world_path.size() > 0:
+		_rejoin_waypoints = world_path
+		_rejoin_idx = 0
