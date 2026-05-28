@@ -357,7 +357,7 @@ func _start_wave(index: int) -> void:
 
 ## Spawn one enemy per tick until the wave count is exhausted.
 func _on_spawn_tick() -> void:
-	var enemy: CharacterBody3D = enemy_spawn.create_enemy()
+	var enemy: CharacterBody3D = enemy_spawn.create_enemy(_current_wave + 1)
 	add_child(enemy)
 	enemy.died.connect(func(_m: float) -> void: _on_enemy_died())
 	_spawned_this_wave += 1

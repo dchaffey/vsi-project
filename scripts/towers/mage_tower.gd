@@ -2,10 +2,14 @@ extends "res://scripts/towers/building.gd"
 
 const EnemyQuery = preload("res://scripts/utils/enemy_query.gd")  # shared enemy query helper for range targeting
 
-var range_radius: float = 30.0
-var shoot_interval: float = 1.5
+const _BASE_RANGE := 30.0
+const _BASE_INTERVAL := 2.5
+const _BASE_PROJECTILES := 1
+
+var range_radius: float = _BASE_RANGE
+var shoot_interval: float = _BASE_INTERVAL
 var shoot_timer: float = 0.0
-var projectiles_per_shot: int = 1
+var projectiles_per_shot: int = _BASE_PROJECTILES
 var _tower_model: Node3D  # reference to the base tower model
 var _query_shape := SphereShape3D.new()
 
@@ -29,20 +33,15 @@ func _ready() -> void:
 	initialize_level()
 
 func _apply_level(level: int) -> void:
-	# Map level to fire stats and visual model.
 	assert(level >= 0 and level <= get_max_upgrades(), "Mage level out of range")
-	if level == 0:
-		range_radius = 30.0
-		shoot_interval = 1.5
-		projectiles_per_shot = 1
-		_query_shape.radius = range_radius
-		_set_tower_model("res://assets/Tower.glb", Vector3(0, 4, 0))
-		return
-	range_radius = 30.0
-	shoot_interval = 0.5
-	projectiles_per_shot = 1
+	range_radius = _BASE_RANGE
+	shoot_interval = _BASE_INTERVAL / (1.0 + float(level) * 2.0)
+	projectiles_per_shot = _BASE_PROJECTILES
 	_query_shape.radius = range_radius
-	_set_tower_model("res://assets/Mage2.glb", Vector3.ZERO)
+	if level == 0:
+		_set_tower_model("res://assets/Tower.glb", Vector3(0, 4, 0))
+	else:
+		_set_tower_model("res://assets/Mage2.glb", Vector3.ZERO)
 
 func _set_tower_model(scene_path: String, local_position: Vector3) -> void:
 	# Replace active visual with the scene for the provided level mapping.

@@ -9,7 +9,7 @@ var control2_offset: Vector3
 var duration: float = 1.2
 var elapsed_time: float = 0.0
 var impact_force: float = 5.0  # magnitude of impulse applied in explosion
-var explosion_radius: float = 30.0  # radius for knocking back multiple enemies
+var explosion_radius: float = 13.0  # radius for knocking back multiple enemies
 var explosion_force: float = 25.0  # force applied per unit falloff in explosion
 var _query_shape := SphereShape3D.new()  # reused sphere for physics queries
 

@@ -2,7 +2,9 @@ extends "res://scripts/towers/building.gd"
 
 const EnemyQuery = preload("res://scripts/utils/enemy_query.gd")  # shared enemy query helper for contact-damage detection
 
-var _damage_per_second: float = 100.0  # HP damage dealt per second of contact
+const _BASE_DPS := 100.0
+
+var _damage_per_second: float = _BASE_DPS  # HP damage dealt per second of contact
 var _enemies_in_range: Dictionary = {}  # tracks enemies in damage zone and their contact time
 var _collision_radius: float = 2.0  # matches building collision shape
 var _query_shape := CylinderShape3D.new()
@@ -34,16 +36,11 @@ func _ready() -> void:
 	physics_material_override = phys_mat
 
 func _apply_level(level: int) -> void:
-	# Map level to trap DPS and visual model.
 	assert(level >= 0 and level <= get_max_upgrades(), "Spikes level out of range")
-	if level == 0:
-		_damage_per_second = 100.0
-		_set_tower_model("res://assets/Barracks.glb")
-	else:
-		_damage_per_second = 180.0
-		_set_tower_model("res://assets/Barracks.glb")
+	_damage_per_second = _BASE_DPS + float(level) * 80.0
 	_query_shape.height = 8.0
 	_query_shape.radius = _collision_radius
+	_set_tower_model("res://assets/Barracks.glb")
 
 func _set_tower_model(scene_path: String) -> void:
 	# Replace active visual with the scene for the provided level mapping.

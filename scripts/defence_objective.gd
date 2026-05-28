@@ -10,8 +10,8 @@ signal game_over()
 ## Visual half-size of the cube in world units.
 var size: float = 4.0
 
-var max_hp: float = 1000.0
-var current_hp: float = 1000.0
+var max_hp: float = 100.0
+var current_hp: float = 100.0
 var _is_game_over: bool = false
 var _hp_label: Label3D  # floating readout above the house — updated on hp_changed
 

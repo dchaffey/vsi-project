@@ -2,10 +2,14 @@ extends "res://scripts/towers/building.gd"
 
 const EnemyQuery = preload("res://scripts/utils/enemy_query.gd")  # shared enemy query helper for range targeting
 
-var range_radius: float = 50.0
-var shoot_interval: float = 0.2
+const _BASE_RANGE := 30.0
+const _BASE_INTERVAL := 0.8
+const _BASE_PROJECTILES := 1
+
+var range_radius: float = _BASE_RANGE
+var shoot_interval: float = _BASE_INTERVAL
 var shoot_timer: float = 0.0
-var projectiles_per_shot: int = 1
+var projectiles_per_shot: int = _BASE_PROJECTILES
 var _tower_model: Node3D  # reference to the base tower model
 var _query_shape := SphereShape3D.new()
 
@@ -29,27 +33,14 @@ func _ready() -> void:
 	initialize_level()
 
 func _apply_level(level: int) -> void:
-	# Map level to fire stats and visual model.
 	assert(level >= 0 and level <= get_max_upgrades(), "Archer level out of range")
+	range_radius = _BASE_RANGE + float(level) * 10.0
+	shoot_interval = _BASE_INTERVAL / pow(2.0, float(level))
+	projectiles_per_shot = _BASE_PROJECTILES * (1 << level)
+	_query_shape.radius = range_radius
 	if level == 0:
-		range_radius = 30.0
-		shoot_interval = 0.8
-		projectiles_per_shot = 1
-		_query_shape.radius = range_radius
 		_set_tower_model("res://assets/Spear Tower.glb", Vector3(0, 4, 0))
-		return
-	elif level == 1 : 
-		range_radius = 40.0
-		shoot_interval = 0.4
-		projectiles_per_shot = 2
-		_query_shape.radius = range_radius
-		_set_tower_model("res://assets/Spear Tower Upgrade .glb", Vector3(0, 4, 0))
-		return
-	elif level == 3 : 
-		range_radius = 50.0
-		shoot_interval = 0.2
-		projectiles_per_shot = 4
-		_query_shape.radius = range_radius
+	else:
 		_set_tower_model("res://assets/Spear Tower Upgrade .glb", Vector3(0, 4, 0))
 
 func _set_tower_model(scene_path: String, local_position: Vector3) -> void:

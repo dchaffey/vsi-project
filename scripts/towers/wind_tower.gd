@@ -2,8 +2,12 @@ extends "res://scripts/towers/building.gd"
 
 const EnemyQuery = preload("res://scripts/utils/enemy_query.gd")
 
-var range_radius: float = 20.0  # detection radius for enemies
-var wind_force: float = 10.0  # impulse magnitude per blast
+const _BASE_RANGE := 20.0
+const _BASE_FORCE := 20.0
+const _BASE_COOLDOWN := 3.0
+
+var range_radius: float = _BASE_RANGE  # detection radius for enemies
+var wind_force: float = _BASE_FORCE  # impulse magnitude per blast
 var wind_direction: Vector3 = Vector3(0, 0, -1)  # static wind direction (forward)
 var cylinder_radius: float = 8.0  # radius of the visualization cylinder
 var blast_height_offset: float = 1.5  # shared local Y offset used by both the visual and physics blast volume
@@ -20,7 +24,7 @@ var _cylinder_material: StandardMaterial3D  # shared cylinder material toggled b
 const _BLAST_IDLE_COLOR := Color(0.5, 0.8, 1.0, 0.25)  # baseline cylinder tint when no gust is active
 const _BLAST_ACTIVE_COLOR := Color(0.9, 0.98, 1.0, 0.58)  # brighter cylinder tint while gust is actively applying force
 
-const MODEL = preload("res://assets/mühle.glb")
+const MODEL = preload("res://assets/mühle_neu.glb")
 
 static func get_cost() -> int:
 	return 40  # purchase cost
@@ -39,9 +43,10 @@ func get_range() -> float:
 
 func _ready() -> void:
 	_model_visual = MODEL.instantiate()
+	# rotate_y(90)
 	add_child(_model_visual)
-	var anim_player = _model_visual.find_child("AnimationPlayer", true, false)
-	anim_player.play("Plane_001Action")
+	# var anim_player = _model_visual.find_child("AnimationPlayer", true, false)
+	# anim_player.play("Plane_001Action")
 	_create_blast_visuals()
 	initialize_level()
 
@@ -64,16 +69,11 @@ func _create_blast_visuals() -> void:
 	_model_visual.add_child(_cylinder_visual)
 
 func _apply_level(level: int) -> void:
-	# Map level to wind force/cooldown while reusing the same model and blast geometry.
 	assert(level >= 0 and level <= get_max_upgrades(), "Wind level out of range")
-	range_radius = 20.0
+	range_radius = _BASE_RANGE
 	cylinder_radius = 8.0
-	if level == 0:
-		wind_force = 20.0
-		blast_cooldown = 3.0
-	else:
-		wind_force = 35.0
-		blast_cooldown = 2.0
+	wind_force = _BASE_FORCE + float(level) * 15.0
+	blast_cooldown = _BASE_COOLDOWN - float(level) * 1.0
 	_refresh_blast_shape_and_visual()
 
 func _refresh_blast_shape_and_visual() -> void:

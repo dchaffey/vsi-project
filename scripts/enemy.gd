@@ -15,8 +15,6 @@ var defence_objective: Area3D
 
 ## Horizontal movement speed in world units per second.
 var move_speed: float = 17.0
-## Vertical jump kick used when pathing gets stuck against small ledges.
-var jump_strength: float = 10.0
 
 ## Current and maximum hit points.
 var hp: float = 50.0
@@ -62,6 +60,10 @@ const MAX_RECOVERING_TIME := 3.0
 
 ## Impulse magnitude (from apply_impulse) that tips the enemy into RAGDOLL.
 var _impulse_ragdoll_threshold: float = 20.0
+
+## Lateral separation: enemies within this radius gently push each other apart.
+const _SEPARATION_RADIUS: float = 3.0
+const _SEPARATION_STRENGTH: float = 20.0
 ## Accumulated-velocity threshold that tips RAGDOLL from apply_force or from fast external velocity changes.
 var _velocity_ragdoll_threshold: float = 40.0
 ## HP removed per unit of impulse magnitude when deal_damage is true on apply_impulse.
@@ -75,10 +77,6 @@ var _wander_angle: float = 0.0
 var _wander_target: float = 0.0
 var _wander_timer: float = 0.0
 
-## Stuck detection: seconds spent with near-zero horizontal speed while pathing on ground.
-var _stuck_timer: float = 0.0
-## Cooldown after a jump to prevent rapid re-jumping.
-var _jump_cooldown: float = 0.0
 
 # ---------------------------------------------------------------------------
 # Waypoint navigation
@@ -117,14 +115,9 @@ func _ready() -> void:
 	assert(defence_objective != null, "enemy.defence_objective must be set before add_child")
 	_start_positions = terrain.get_start_world_positions()
 	defence_objective.enemy_entered.connect(_on_defence_objective_entered)
-
+	rotate_y(180)
 	GRAVITY = ProjectSettings.get_setting("physics/3d/default_gravity")
-
-	# 10% chance to spawn as a giant variant — double size, double HP.
-	if _rng.randf() < 0.1:
-		scale *= 2.0
-		max_hp *= 2.0
-		hp = max_hp
+	collision_mask = 2 | 4 | 8  # Exclude terrain (layer 1) — Y handled by snap in _physics_process
 
 
 ## One-shot velocity kick. Used by explosions, projectile impacts, per-frame wind/suck calls.
@@ -184,15 +177,21 @@ func _physics_process(delta: float) -> void:
 
 	move_and_slide()
 
+	# Snap to terrain surface while pathing — keeps enemies glued to the ground
+	# regardless of slope, without needing gravity or jump recovery.
+	if _state == State.PATHING:
+		var ground_y: float = terrain.get_height_at(global_position.x, global_position.z)
+		global_position.y = ground_y + scale.y  # scale.y * 1.0 = half capsule height at this scale
+
 	if _flash_timer > 0.0:
 		_flash_timer -= delta
 		if _flash_timer <= 0.0:
 			_update_color()
 
 
-## PATHING: waypoint following + gravity + stuck-detection jump.
+## PATHING: waypoint following with direct terrain-height snapping — no gravity, no jumping.
 func _process_pathing(delta: float) -> void:
-	velocity.y -= GRAVITY * delta
+	velocity.y = 0.0  # Y is snapped to terrain in _physics_process after move_and_slide
 
 	# Wander drift — randomized yaw offset lerped toward a new target.
 	_wander_timer -= delta
@@ -234,19 +233,22 @@ func _process_pathing(delta: float) -> void:
 			velocity.x = lerpf(velocity.x, desired.x, clampf(delta * 5.0, 0.0, 1.0))
 			velocity.z = lerpf(velocity.z, desired.z, clampf(delta * 5.0, 0.0, 1.0))
 
-	# Stuck detection — hop if blocked on the ground for long enough.
-	_jump_cooldown -= delta
-	var horiz: float = Vector2(velocity.x, velocity.z).length()
-	if horiz < move_speed * 0.2 and is_on_floor():
-		_stuck_timer += delta
-		if _stuck_timer > 0.5 and _jump_cooldown <= 0.0:
-			velocity.y = jump_strength
-			_stuck_timer = 0.0
-			_jump_cooldown = 1.0
-	else:
-		_stuck_timer = 0.0
+	# Soft lateral separation — push away from enemies that are too close.
+	for other: Node in get_tree().get_nodes_in_group("enemies"):
+		if other == self:
+			continue
+		var offset := Vector3(
+			global_position.x - (other as Node3D).global_position.x,
+			0.0,
+			global_position.z - (other as Node3D).global_position.z
+		)
+		var dist: float = offset.length()
+		if dist < _SEPARATION_RADIUS and dist > 0.001:
+			var strength: float = (1.0 - dist / _SEPARATION_RADIUS) * _SEPARATION_STRENGTH
+			velocity += offset.normalized() * strength * delta
 
 	# Face the horizontal movement direction.
+	var horiz: float = Vector2(velocity.x, velocity.z).length()
 	if horiz > 1.0:
 		var target_yaw: float = atan2(-velocity.x, -velocity.z)
 		rotation.y = lerp_angle(rotation.y, target_yaw, clampf(delta * 8.0, 0.0, 1.0))
@@ -296,6 +298,7 @@ func _process_recovering(delta: float) -> void:
 	_recovering_timer += delta
 	if _recovering_timer >= MAX_RECOVERING_TIME:
 		_state = State.PATHING
+		collision_mask = 2 | 4 | 8
 		_angular_velocity = Vector3.ZERO
 		_ragdoll_timer = 0.0
 		_rejoin_delay = _REJOIN_DELAY
@@ -313,6 +316,7 @@ func _process_recovering(delta: float) -> void:
 
 	if quaternion.dot(target_quat) > 0.99:
 		_state = State.PATHING
+		collision_mask = 2 | 4 | 8
 		_angular_velocity = Vector3.ZERO
 		_ragdoll_timer = 0.0
 		_recovering_timer = 0.0
@@ -338,6 +342,7 @@ func _enter_ragdoll() -> void:
 	_state = State.RAGDOLL
 	_settle_timer = 0.0
 	_ragdoll_timer = 0.0
+	collision_mask = 1 | 2 | 4 | 8  # Restore terrain so the body bounces and settles
 
 	if has_meta("recovering_target_quat"):
 		remove_meta("recovering_target_quat")
@@ -358,6 +363,7 @@ func _enter_dead() -> void:
 	hp = 0.0
 	_dead_timer = 0.0
 	_state = State.DEAD
+	collision_mask = 1 | 2 | 4 | 8  # Restore terrain so the corpse lands on the ground
 	if material:
 		material.albedo_color = Color(1.0, 0.0, 0.0, 1.0)
 	died.emit(max_hp)
@@ -417,14 +423,13 @@ func _respawn_at_start() -> void:
 	_flash_timer = 0.0
 	_update_color()
 	_state = State.PATHING
+	collision_mask = 2 | 4 | 8
 	_settle_timer = 0.0
 	_ragdoll_timer = 0.0
 	_recovering_timer = 0.0
 	_wander_angle = 0.0
 	_wander_target = 0.0
 	_wander_timer = 0.0
-	_stuck_timer = 0.0
-	_jump_cooldown = 0.0
 	quaternion = Quaternion.IDENTITY
 	_waypoint_idx = 0
 	_rejoin_waypoints = []

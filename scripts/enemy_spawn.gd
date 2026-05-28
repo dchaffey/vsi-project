@@ -34,7 +34,7 @@ func _build_marker_mesh() -> void:
 
 
 ## Create one enemy near this spawn point with position jitter. Called by wave manager.
-func create_enemy() -> CharacterBody3D:
+func create_enemy(wave_number: int = 1) -> CharacterBody3D:
 	assert(terrain != null, "terrain must be set on EnemySpawn before spawning")
 	assert(defence_objective != null, "defence_objective must be set on EnemySpawn before spawning")
 
@@ -46,22 +46,39 @@ func create_enemy() -> CharacterBody3D:
 	enemy.position = Vector3(x, y, z)
 	enemy.name = "%s_Enemy_%d" % [name, _enemy_index]
 	enemy.collision_layer = 2            # Layer 2 — Enemies
-	enemy.collision_mask = 1 | 2 | 4 | 8 # Ground, Enemies, Player, Boulder
+	enemy.collision_mask = 1 | 4 | 8 # Ground, Player, Boulder — enemies pass through each other; soft separation force handles spacing
 
 	# Set the script first
 	enemy.set_script(load("res://scripts/enemy.gd"))
-	
+
 	# Now set the properties - they should be accessible after set_script
 	# Use set() method to avoid type checking issues
 	enemy.set("terrain", terrain)
 	enemy.set("defence_objective", defence_objective)
+
+	# Wave base speed: 10 at wave 1, +2 per wave, capped at 20.
+	var wave_base_speed: float = min(10.0 + float(wave_number - 1) * 2.0, 20.0)
+
+	# 100 resource points randomly split between HP/size and speed.
+	# Speed costs 50 pts for +2 (ratio 50:2); HP costs 1 pt for +1 HP and +1% size (ratio 100:1).
+	var speed_points: int = _rng.randi_range(0, 100)
+	var hp_points: int = 100 - speed_points
+
+	var final_max_hp: float = 100.0 * float(wave_number) + float(hp_points)
+	var final_speed: float = min(wave_base_speed + float(speed_points) * (2.0 / 50.0), 20.0)
+	var size_mult: float = 1.0 + float(hp_points) * 0.01
+
+	enemy.set("max_hp", final_max_hp)
+	enemy.set("hp", final_max_hp)
+	enemy.set("move_speed", final_speed)
+	enemy.scale = Vector3(size_mult, size_mult, size_mult)
 
 	_attach_mesh(enemy)
 	_attach_collision(enemy)
 
 	enemy.died.connect(func(m_hp: float) -> void:
 		if player:
-			player.money += m_hp / 100.0  # reward money proportional to max HP
+			player.money += m_hp / 200.0  # reward money proportional to max HP
 	)
 
 	# Assign a laterally-offset copy of one of the A* road paths.
@@ -82,6 +99,7 @@ func _attach_mesh(enemy: CharacterBody3D) -> void:
 	assert(dwarf_scene != null, "Failed to load res://assets/early_dwarf.glb")
 	var model := dwarf_scene.instantiate()
 	model.position = Vector3(0.0, -1.0, 0.0)  # drop so feet sit at the bottom of the collision box
+	model.scale = Vector3(0.75, 0.75, 0.75)
 	enemy.add_child(model)
 
 	# Transparent overlay — alpha 0 at full HP so original textures show through.

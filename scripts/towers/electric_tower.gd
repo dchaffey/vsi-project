@@ -2,18 +2,24 @@ extends "res://scripts/towers/building.gd"
 
 const EnemyQuery = preload("res://scripts/utils/enemy_query.gd")  # shared enemy sphere query helper
 
+const _BASE_RANGE := 35.0
+const _BASE_INTERVAL := 1.2
+const _BASE_DAMAGE := 20.0
+const _BASE_JUMPS := 4
+const _BASE_CHAIN_RANGE := 15.0
+
 ## Firing range — enemies outside this radius are ignored.
-var range_radius: float = 35.0
+var range_radius: float = _BASE_RANGE
 ## Seconds between shots.
-var shoot_interval: float = 1.2
+var shoot_interval: float = _BASE_INTERVAL
 ## Accumulator for shoot_interval.
 var shoot_timer: float = 0.0
 ## Damage the electric projectile deals per chain jump.
-var bolt_damage: float = 20.0
+var bolt_damage: float = _BASE_DAMAGE
 ## Max enemies the chain can jump to beyond the initial target.
-var bolt_max_jumps: int = 4
+var bolt_max_jumps: int = _BASE_JUMPS
 ## Max world-unit distance between chain jumps.
-var bolt_chain_range: float = 15.0
+var bolt_chain_range: float = _BASE_CHAIN_RANGE
 
 var _tower_model: Node3D  # active visual — swapped on level change
 var _query_shape := SphereShape3D.new()  # reused for EnemyQuery calls
@@ -41,21 +47,11 @@ func _ready() -> void:
 
 func _apply_level(level: int) -> void:
 	assert(level >= 0 and level <= get_max_upgrades(), "Electric tower level out of range")
-	if level == 0:
-		range_radius = 35.0
-		shoot_interval = 1.2
-		bolt_damage = 20.0
-		bolt_max_jumps = 4
-		bolt_chain_range = 15.0
-		_query_shape.radius = range_radius
-		_set_tower_model("res://assets/tesla__tower.glb", Vector3.ZERO)
-		return
-	# Level 1: faster fire, more damage, longer chain
-	range_radius = 45.0
-	shoot_interval = 0.7
-	bolt_damage = 30.0
-	bolt_max_jumps = 6
-	bolt_chain_range = 20.0
+	range_radius = _BASE_RANGE + float(level) * 10.0
+	shoot_interval = _BASE_INTERVAL / (1.0 + float(level) * 0.7)
+	bolt_damage = _BASE_DAMAGE + float(level) * 10.0
+	bolt_max_jumps = _BASE_JUMPS + level * 2
+	bolt_chain_range = _BASE_CHAIN_RANGE + float(level) * 5.0
 	_query_shape.radius = range_radius
 	_set_tower_model("res://assets/tesla__tower.glb", Vector3.ZERO)
 

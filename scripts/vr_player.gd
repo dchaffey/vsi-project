@@ -13,7 +13,7 @@ var money: float = 100.0:
 		money = val
 		money_changed.emit(money)
 
-var tower_path_clearance: float = 2.0  # minimum distance from paths for tower placement
+var tower_path_clearance: float = 12.0  # minimum distance from paths for tower placement
 ## Fallback projectile endpoint distance when the controller ray doesn't hit anything.
 var fire_max_distance: float = 100.0
 ## Horizontal spread radius (meters) randomly applied to the projectile endpoint.
